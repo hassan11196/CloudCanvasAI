@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 from typing import Optional, Any
 import re
 import traceback
+import logging
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends
@@ -27,7 +28,13 @@ from claude_agent_sdk import (
     ToolResultBlock,
 )
 
-from sandbox_manager import SandboxManager, SANDBOX_ROOT
+from sandbox_manager import SandboxManager, SANDBOX_ROOT, SANDBOX_WORKSPACE
+from session_files import (
+    session_prefix,
+    session_storage_path,
+    session_logical_path,
+    is_session_file,
+)
 from auth import get_current_user
 
 # Document-focused tools for the skills integration
@@ -89,6 +96,8 @@ def should_use_sandbox(message: str) -> bool:
     return False
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # Initialize E2B sandbox manager
 sandbox_manager = SandboxManager()
@@ -101,16 +110,33 @@ def get_or_create_session(
     session_id: Optional[str] = None,
 ) -> tuple[str, object]:
     """Get existing session or create new one with isolated E2B sandbox."""
+    start_time = time.monotonic()
+    print("[stream] get_or_create_session start user_id=%s session_id=%s" % (user_id, session_id))
     if session_id:
         sandbox = sandbox_manager.get_sandbox(user_id)
         if sandbox:
+            print(
+                "[stream] reuse sandbox duration=%.3fs sandbox_id=%s",
+                time.monotonic() - start_time,
+                getattr(sandbox, "sandbox_id", "unknown"),
+            )
             return session_id, sandbox
         sandbox = sandbox_manager.create_sandbox(user_id)
+        print(
+            "[stream] created sandbox for session duration=%.3fs sandbox_id=%s",
+            time.monotonic() - start_time,
+            getattr(sandbox, "sandbox_id", "unknown"),
+        )
         return session_id, sandbox
 
     # Create new session with E2B sandbox
     new_id = str(uuid.uuid4())
     sandbox = sandbox_manager.create_sandbox(user_id)
+    print(
+        "[stream] created sandbox new session duration=%.3fs sandbox_id=%s",
+        time.monotonic() - start_time,
+        getattr(sandbox, "sandbox_id", "unknown"),
+    )
     return new_id, sandbox
 
 
@@ -163,41 +189,27 @@ def get_file_path_from_tool(tool_name: str, tool_input: dict) -> Optional[str]:
     return None
 
 
-def scan_for_new_documents(sandbox, known_files: set) -> list[str]:
-    """Scan E2B sandbox for any new document files in workspace and tmp directories."""
+def scan_for_new_documents(sandbox, known_files: set, session_id: str) -> list[str]:
+    """Scan E2B sandbox for new document files in the session workspace."""
     new_files = []
-    # Only scan specific directories where documents are likely to be created
-    scan_dirs = [
-        f"{SANDBOX_ROOT}/workspace",
-        f"{SANDBOX_ROOT}/tmp",
-        SANDBOX_ROOT,  # Top-level only
-    ]
-
-    for scan_dir in scan_dirs:
-        try:
-            # For SANDBOX_ROOT, only check top-level files, not subdirectories
-            if scan_dir == SANDBOX_ROOT:
-                entries = sandbox.files.list(scan_dir)
-                for entry in entries:
-                    if entry.type != "dir":
-                        rel_path = entry.name
-                        if any(rel_path.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
-                            if rel_path not in known_files:
-                                new_files.append(rel_path)
-                                known_files.add(rel_path)
-            else:
-                # For workspace/tmp, scan recursively but with depth limit
-                entries = _iter_sandbox_files(sandbox, scan_dir, base_root=SANDBOX_ROOT)
-                for rel_path, is_dir in entries:
-                    if is_dir:
-                        continue
-                    if any(rel_path.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
-                        if rel_path not in known_files:
-                            new_files.append(rel_path)
-                            known_files.add(rel_path)
-        except Exception:
-            # Directory might not exist yet, that's okay
-            continue
+    scan_dir = SANDBOX_WORKSPACE
+    try:
+        entries = _iter_sandbox_files(sandbox, scan_dir, base_root=SANDBOX_ROOT)
+        for rel_path, is_dir in entries:
+            if is_dir:
+                continue
+            filename = PurePosixPath(rel_path).name
+            if not is_session_file(session_id, filename):
+                continue
+            if not any(filename.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
+                continue
+            logical_name = session_logical_path(session_id, filename)
+            if logical_name not in known_files:
+                new_files.append(logical_name)
+                known_files.add(logical_name)
+    except Exception:
+        # Directory might not exist yet, that's okay
+        pass
 
     return new_files
 
@@ -246,7 +258,7 @@ def _iter_sandbox_files(sandbox, root_path: str, base_root: str = SANDBOX_ROOT) 
     return results
 
 
-def _build_sandbox_mcp_server(sandbox):
+def _build_sandbox_mcp_server(sandbox, session_id: str):
     read_schema = {
         "type": "object",
         "properties": {
@@ -339,8 +351,19 @@ def _build_sandbox_mcp_server(sandbox):
     @tool("Read", "Read a file from the sandbox filesystem", read_schema)
     async def read_tool(args):
         try:
-            target_path = _resolve_sandbox_path(_extract_tool_path(args))
-            content = sandbox.files.read(target_path)
+            file_path = _extract_tool_path(args)
+            if not file_path:
+                raise ValueError("file_path is required")
+            content = None
+            if not PurePosixPath(file_path).is_absolute():
+                session_path = session_storage_path(session_id, file_path)
+                try:
+                    content = sandbox.files.read(session_path)
+                except Exception:
+                    content = None
+            if content is None:
+                target_path = _resolve_sandbox_path(file_path)
+                content = sandbox.files.read(target_path)
             if isinstance(content, bytes):
                 text = content.decode("utf-8", errors="replace")
             else:
@@ -355,7 +378,10 @@ def _build_sandbox_mcp_server(sandbox):
     @tool("Write", "Write a file to the sandbox filesystem", write_schema)
     async def write_tool(args):
         try:
-            target_path = _resolve_sandbox_path(_extract_tool_path(args))
+            file_path = _extract_tool_path(args)
+            if not file_path:
+                raise ValueError("file_path is required")
+            target_path = session_storage_path(session_id, file_path)
             content = args.get("content", "")
             sandbox.files.write(target_path, content)
             return {"content": [{"type": "text", "text": f"Wrote {target_path}"}]}
@@ -368,7 +394,10 @@ def _build_sandbox_mcp_server(sandbox):
     @tool("Edit", "Edit a file in the sandbox filesystem", edit_schema)
     async def edit_tool(args):
         try:
-            target_path = _resolve_sandbox_path(_extract_tool_path(args))
+            file_path = _extract_tool_path(args)
+            if not file_path:
+                raise ValueError("file_path is required")
+            target_path = session_storage_path(session_id, file_path)
             content = sandbox.files.read(target_path)
             if isinstance(content, bytes):
                 text = content.decode("utf-8", errors="replace")
@@ -466,7 +495,7 @@ def _build_sandbox_mcp_server(sandbox):
             result = sandbox.commands.run(
                 command,
                 timeout=120,
-                cwd=SANDBOX_ROOT,
+                cwd=SANDBOX_WORKSPACE,
                 envs={
                     "TMPDIR": f"{SANDBOX_ROOT}/tmp",
                     "NODE_PATH": "/usr/local/lib/node_modules",
@@ -512,6 +541,7 @@ async def agent_event_generator(
     use_sandbox = should_use_sandbox(message)
     if use_sandbox:
         yield f"data: {json.dumps({'type': 'status', 'content': 'Starting sandbox'})}\n\n"
+        print("[stream] sandbox requested user_id=%s session_id=%s", user_id, session_id)
         sid, sandbox = get_or_create_session(user_id, session_id)
         is_resume = session_id is not None
         SESSION_USERS[sid] = user_id
@@ -539,8 +569,12 @@ async def agent_event_generator(
         "/scripts/create_docx.py",
         f"{SANDBOX_ROOT}/scripts/create_docx.py"
     )
+    system_prompt += (
+        f"\n\nSession file rule: store generated files in {SANDBOX_WORKSPACE} "
+        f"and prefix filenames with '{session_prefix(sid)}'."
+    )
 
-    sandbox_server = _build_sandbox_mcp_server(sandbox) if sandbox else None
+    sandbox_server = _build_sandbox_mcp_server(sandbox, sid) if sandbox else None
     stderr_lines: list[str] = []
 
     def _stderr_callback(line: str) -> None:
@@ -575,12 +609,15 @@ async def agent_event_generator(
     # Get initial file list from E2B sandbox
     if sandbox:
         try:
-            entries = _iter_sandbox_files(sandbox, SANDBOX_ROOT)
+            entries = _iter_sandbox_files(sandbox, SANDBOX_WORKSPACE, base_root=SANDBOX_ROOT)
             for rel_path, is_dir in entries:
                 if is_dir:
                     continue
-                if any(rel_path.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
-                    known_files.add(rel_path)
+                filename = PurePosixPath(rel_path).name
+                if not is_session_file(sid, filename):
+                    continue
+                if any(filename.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
+                    known_files.add(session_logical_path(sid, filename))
         except Exception as e:
             print(f"Error listing initial files: {e}")
 
@@ -624,18 +661,19 @@ async def agent_event_generator(
                                 if tool_use['name'] in ("Edit", "replace_file_content", "multi_replace_file_content"):
                                     action = "modified"
 
+                                logical_path = session_logical_path(sid, file_path)
                                 file_event = {
                                     'type': 'file_change',
-                                    'path': file_path,
+                                    'path': logical_path,
                                     'action': action,
                                     'timestamp': time.time()
                                 }
                                 yield f"data: {json.dumps(file_event)}\n\n"
-                                known_files.add(file_path)
+                                known_files.add(logical_path)
 
                             # Also scan for any new document files after Bash commands
                             if tool_use['name'] in ("Bash", "run_command"):
-                                new_docs = scan_for_new_documents(sandbox, known_files)
+                                new_docs = scan_for_new_documents(sandbox, known_files, sid)
                                 print(f"DEBUG: Scanned new docs: {new_docs}")
                                 for doc_path in new_docs:
                                     file_event = {
@@ -698,6 +736,7 @@ async def stream_message(
     user=Depends(get_current_user),
 ):
     """Stream chat responses using SSE."""
+    print("[stream] stream_message start user_id=%s session_id=%s", user["uid"], chat_message.session_id)
     return StreamingResponse(
         agent_event_generator(chat_message.message, user["uid"], chat_message.session_id),
         media_type="text/event-stream",

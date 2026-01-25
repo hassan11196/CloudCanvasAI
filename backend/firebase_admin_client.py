@@ -18,8 +18,10 @@ def _init_app() -> firebase_admin.App:
     credentials_path = os.getenv("FIREBASE_CREDENTIALS_PATH")
 
     if credentials_json:
+        print("Initializing Firebase app with JSON credentials.")
         cred = credentials.Certificate(json.loads(credentials_json))
     elif credentials_path:
+        print(f"Initializing Firebase app with credentials from path: {credentials_path}")
         cred = credentials.Certificate(credentials_path)
     else:
         raise RuntimeError(
@@ -28,6 +30,13 @@ def _init_app() -> firebase_admin.App:
         )
 
     _APP = firebase_admin.initialize_app(cred)
+    # can you ping the firestore to verify?
+    try:
+        firestore.client(_APP).collections()
+        print("Firebase app initialized and Firestore is reachable.")
+    except Exception as e:
+        print(f"Error verifying Firestore connectivity: {e}")
+        raise
     return _APP
 
 

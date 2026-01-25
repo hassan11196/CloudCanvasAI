@@ -1,11 +1,10 @@
 import os
 import logging
+import time
 from pathlib import Path
 from typing import Optional, Dict
 from e2b_code_interpreter import Sandbox
-from firebase_admin import firestore
 
-from firebase_admin_client import get_firestore_client
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -28,15 +27,18 @@ class SandboxManager:
         
         # In-memory mapping of user_id -> Sandbox instance
         self.sandboxes: Dict[str, Sandbox] = {}
-        self.firestore = get_firestore_client()
+        self.user_sandbox_ids: Dict[str, str] = {}
         
         # Template data directory
         self.data_dir = Path(__file__).parent / "very_imp_data"
         self.scripts_dir = Path(__file__).parent / "scripts"
         self.skills_dir = Path(__file__).parent / "skills"
+
     
     def create_sandbox(self, user_id: str) -> Sandbox:
         """Create a new E2B sandbox for the given user."""
+        start_time = time.monotonic()
+        print(f"[sandbox] create_sandbox start user_id={user_id}")
         if not self.api_key:
             raise ValueError(
                 "E2B_API_KEY environment variable is required. "
@@ -45,69 +47,68 @@ class SandboxManager:
             )
         
         if user_id in self.sandboxes:
-            logger.info(f"Reusing existing sandbox for user {user_id}")
+            print(f"Reusing existing sandbox for user {user_id}")
             return self.sandboxes[user_id]
 
         sandbox = None
-        doc_ref = self.firestore.collection("user_sandboxes").document(user_id)
-
-        # Try to reconnect to existing sandbox
-        try:
-            doc = doc_ref.get()
-            if doc.exists:
-                data = doc.to_dict() or {}
-                sandbox_id = data.get("sandbox_id")
-                if sandbox_id:
-                    logger.info(f"Attempting to reconnect to sandbox {sandbox_id} for user {user_id}")
-                    try:
-                        sandbox = Sandbox.connect(sandbox_id, timeout=self.sandbox_timeout)
-                        logger.info(f"Successfully reconnected to sandbox {sandbox_id}")
-                    except Exception as e:
-                        logger.warning(f"Failed to reconnect to sandbox {sandbox_id}: {e}")
-                        # Clean up stale Firestore record
-                        try:
-                            doc_ref.delete()
-                            logger.info(f"Deleted stale sandbox record for user {user_id}")
-                        except Exception as cleanup_error:
-                            logger.error(f"Failed to delete stale record: {cleanup_error}")
-                        sandbox = None
-        except Exception as e:
-            logger.error(f"Error querying Firestore for user {user_id}: {e}")
+        print(f"[sandbox] checking in-memory record user_id={user_id}")
+        sandbox_id = self.user_sandbox_ids.get(user_id)
+        if sandbox_id:
+            print(f"Attempting to reconnect to sandbox {sandbox_id} for user {user_id}")
+            try:
+                connect_start = time.monotonic()
+                sandbox = Sandbox.connect(sandbox_id, timeout=self.sandbox_timeout)
+                print(
+                    "[sandbox] connect duration=%.3fs sandbox_id=%s",
+                    time.monotonic() - connect_start,
+                    sandbox_id,
+                )
+                print(f"Successfully reconnected to sandbox {sandbox_id}")
+            except Exception as e:
+                print(f"Failed to reconnect to sandbox {sandbox_id}: {e}")
+                self.user_sandbox_ids.pop(user_id, None)
+                sandbox = None
 
         # Create new sandbox if reconnection failed
         if sandbox is None:
-            logger.info(f"Creating new sandbox for user {user_id}")
+            print(f"Creating new sandbox for user {user_id}")
             try:
+                create_start = time.monotonic()
                 sandbox = Sandbox.create(
                     timeout=self.sandbox_timeout,
                     template=self.template,
                 )
-                logger.info(f"Created sandbox {sandbox.sandbox_id} for user {user_id}")
+                print(
+                    "[sandbox] create duration=%.3fs sandbox_id=%s",
+                    time.monotonic() - create_start,
+                    sandbox.sandbox_id,
+                )
+                print(f"Created sandbox {sandbox.sandbox_id} for user {user_id}")
 
-                # Store sandbox ID in Firestore
-                try:
-                    doc_ref.set(
-                        {
-                            "sandbox_id": sandbox.sandbox_id,
-                            "updated_at": firestore.SERVER_TIMESTAMP,
-                        },
-                        merge=True,
-                    )
-                    logger.info(f"Stored sandbox ID in Firestore for user {user_id}")
-                except Exception as e:
-                    logger.error(f"Failed to store sandbox ID in Firestore: {e}")
-                    # Continue anyway - sandbox is created, just not persisted
+                self.user_sandbox_ids[user_id] = sandbox.sandbox_id
+                print(f"Stored sandbox ID in memory for user {user_id}")
 
             except Exception as e:
-                logger.error(f"Failed to create sandbox for user {user_id}: {e}")
+                print(f"Failed to create sandbox for user {user_id}: {e}")
                 raise RuntimeError(f"Failed to create sandbox: {e}")
         
         # Initialize sandbox with template files
+        init_start = time.monotonic()
         self._initialize_sandbox(sandbox)
+        logger.info(
+            "[sandbox] initialize duration=%.3fs sandbox_id=%s",
+            time.monotonic() - init_start,
+            getattr(sandbox, "sandbox_id", "unknown"),
+        )
         
         # Store sandbox reference
         self.sandboxes[user_id] = sandbox
         
+        logger.info(
+            "[sandbox] create_sandbox complete duration=%.3fs user_id=%s",
+            time.monotonic() - start_time,
+            user_id,
+        )
         return sandbox
     
     def get_sandbox(self, user_id: str) -> Optional[Sandbox]:
@@ -196,6 +197,8 @@ class SandboxManager:
             logger.info("Copying skills directory to Claude SDK location")
             # Copy to the primary Claude SDK skills directory
             self._copy_directory_to_sandbox(sandbox, self.skills_dir, "/etc/claude-code/.claude/skills")
+            # Also copy to the user skills directory as a fallback
+            self._copy_directory_to_sandbox(sandbox, self.skills_dir, "/root/.claude/skills")
             logger.info("Sandbox initialization complete")
     
     def _copy_directory_to_sandbox(self, sandbox: Sandbox, local_dir: Path, remote_path: str):
@@ -366,13 +369,8 @@ class SandboxManager:
             # Remove from in-memory cache regardless of close result
             del self.sandboxes[user_id]
 
-            # Clean up Firestore record
-            try:
-                doc_ref = self.firestore.collection("user_sandboxes").document(user_id)
-                doc_ref.delete()
-                logger.info(f"Deleted Firestore record for user {user_id}")
-            except Exception as e:
-                logger.error(f"Failed to delete Firestore record for user {user_id}: {e}")
+            # Remove any cached mapping
+            self.user_sandbox_ids.pop(user_id, None)
     
     def close_all(self):
         """Close all sandboxes."""
