@@ -103,6 +103,16 @@
   background: #333;
 }
 
+.error-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.error-actions button {
+  margin-top: 0;
+}
+
 /* DOCX Content - White document appearance */
 .docx-content {
   background: #fff;

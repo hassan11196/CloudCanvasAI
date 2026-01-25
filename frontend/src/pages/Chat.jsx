@@ -287,7 +287,17 @@ function Chat() {
         if (event.type === 'session') {
           updateActiveChat({ sessionId: event.session_id });
         } else if (event.type === 'status') {
-          setStatusMessage(event.content || '');
+          if (event.content === 'doc_generation_requested') {
+            const docPath = event.path || '';
+            if (docPath) {
+              setSelectedFile(docPath);
+              setFileRefreshTrigger((prev) => prev + 1);
+            }
+            setPreviewOpen(true);
+            setStatusMessage(docPath ? `Document requested: ${docPath}` : 'Document generation requested');
+          } else {
+            setStatusMessage(event.content || '');
+          }
         } else if (event.type === 'usage') {
           setUsageSummary({
             totalCost: event.total_cost_usd,
