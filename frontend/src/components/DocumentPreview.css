@@ -1,0 +1,222 @@
+.document-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: #141414;
+}
+
+.document-preview.empty {
+  justify-content: center;
+  align-items: center;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+}
+
+.empty-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 16px;
+  opacity: 0.4;
+}
+
+.empty-state p {
+  color: #737373;
+  margin: 0;
+  font-size: 14px;
+}
+
+.empty-hint {
+  color: #525252 !important;
+  margin-top: 8px !important;
+  font-size: 13px !important;
+}
+
+.preview-header {
+  display: none; /* Header is now in parent component */
+}
+
+.preview-content {
+  flex: 1;
+  overflow: auto;
+  padding: 0;
+  min-height: 0;
+}
+
+.loading-state,
+.error-state,
+.unsupported-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #262626;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-state p,
+.error-state p,
+.unsupported-state p {
+  color: #737373;
+  font-size: 14px;
+  margin: 0;
+}
+
+.error-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+}
+
+.error-state button,
+.unsupported-state button {
+  margin-top: 16px;
+  padding: 8px 16px;
+  background: #262626;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #e5e5e5;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.error-state button:hover,
+.unsupported-state button:hover {
+  background: #333;
+}
+
+/* DOCX Content - White document appearance */
+.docx-content {
+  background: #fff;
+  color: #1a1a1a;
+  padding: 48px 56px;
+  margin: 16px;
+  border-radius: 4px;
+  min-height: calc(100% - 32px);
+  font-family: 'Georgia', 'Times New Roman', serif;
+  font-size: 14px;
+  line-height: 1.7;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.docx-content h1 {
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0 0 24px;
+  color: #0d0d0d;
+  font-family: 'Arial', sans-serif;
+}
+
+.docx-content h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 32px 0 16px;
+  color: #1a1a1a;
+  font-family: 'Arial', sans-serif;
+}
+
+.docx-content h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 24px 0 12px;
+  color: #262626;
+  font-family: 'Arial', sans-serif;
+}
+
+.docx-content p {
+  margin: 0 0 12px;
+}
+
+.docx-content ul,
+.docx-content ol {
+  margin: 0 0 16px 24px;
+  padding: 0;
+}
+
+.docx-content li {
+  margin-bottom: 6px;
+}
+
+.docx-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 13px;
+}
+
+.docx-content th,
+.docx-content td {
+  border: 1px solid #d4d4d4;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.docx-content th {
+  background: #f5f5f5;
+  font-weight: 600;
+}
+
+.docx-content strong {
+  font-weight: 600;
+}
+
+.docx-content em {
+  font-style: italic;
+}
+
+/* Text/Code Content */
+.text-content {
+  background: #0d0d0d;
+  color: #e5e5e5;
+  padding: 16px;
+  margin: 0;
+  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  min-height: 100%;
+}
+
+/* PDF Frame */
+.pdf-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #fff;
+}
+
+/* Update Indicator */
+.updating-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #2563eb, #7c3aed, #2563eb);
+  background-size: 200% 100%;
+  animation: updating 1s linear infinite;
+}
+
+@keyframes updating {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
