@@ -1,9 +1,9 @@
-
+let API_BASE_URL;
 
 if (import.meta.env.DEV) {
   API_BASE_URL = 'http://localhost:8000';
 } else {
-  API_BASE_URL = 'https://zephior-claude-canvas.up.railway.app'
+  API_BASE_URL = 'https://zephior-claude-canvas.up.railway.app';
 }
 
 export const apiService = {
