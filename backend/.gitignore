@@ -177,3 +177,4 @@ pyrightconfig.json
 venv/   
 .env
 .sandboxes
+./secret/

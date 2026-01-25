@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import chat
+from routers import chat, files
 
 app = FastAPI(
     title="Zephior API",
@@ -19,6 +19,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(chat.router)
+app.include_router(files.router)
 
 
 @app.get("/")
