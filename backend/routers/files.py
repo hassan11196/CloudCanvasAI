@@ -7,7 +7,14 @@ from pydantic import BaseModel
 # Reuse the same sandbox manager instance as the chat router.
 from routers.chat import sandbox_manager
 from sandbox_manager import SANDBOX_WORKSPACE
-from session_files import session_logical_name, is_session_file, session_storage_path
+from session_files import (
+    is_session_file,
+    session_logical_name,
+    session_logical_path,
+    session_prefix,
+    session_storage_path,
+    session_workspace_dir,
+)
 from auth import get_current_user
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -36,21 +43,52 @@ async def list_files(
     try:
         if path:
             raise HTTPException(status_code=400, detail="Path listing is not supported for session files")
-        file_list = sandbox.files.list(SANDBOX_WORKSPACE)
-        
+        session_dir = session_workspace_dir(session_id)
+        try:
+            sandbox.files.make_dir(session_dir)
+        except Exception:
+            pass
+
         files = []
+
+        # Prefer folder-based storage
+        try:
+            file_list = sandbox.files.list(session_dir)
+        except Exception:
+            file_list = []
+
         for file_info in file_list:
+            if file_info.type == "dir":
+                continue
+            logical_path = session_logical_path(session_id, f"{session_id}/{file_info.name}")
+            files.append(FileInfo(
+                name=session_logical_name(session_id, file_info.name),
+                path=logical_path,
+                is_dir=False,
+                size=getattr(file_info, "size", 0) or 0,
+                modified=getattr(file_info, "modified_at", 0) or 0
+            ))
+
+        # Legacy prefixed files fallback
+        try:
+            legacy_list = sandbox.files.list(SANDBOX_WORKSPACE)
+        except Exception:
+            legacy_list = []
+
+        for file_info in legacy_list:
             if file_info.type == "dir":
                 continue
             if not is_session_file(session_id, file_info.name):
                 continue
             logical_name = session_logical_name(session_id, file_info.name)
+            if any(existing.path == logical_name for existing in files):
+                continue
             files.append(FileInfo(
                 name=logical_name,
                 path=logical_name,
                 is_dir=False,
-                size=0,  # E2B doesn't provide size in list
-                modified=0  # E2B doesn't provide modification time
+                size=getattr(file_info, "size", 0) or 0,
+                modified=getattr(file_info, "modified_at", 0) or 0
             ))
         
         # Sort: directories first, then files, alphabetically
@@ -74,7 +112,12 @@ async def get_file(
     
     try:
         target_path = session_storage_path(session_id, file_path)
-        content = sandbox.files.read(target_path)
+        try:
+            content = sandbox.files.read(target_path)
+        except Exception:
+            legacy_name = f"{session_prefix(session_id)}{session_logical_name(session_id, file_path)}"
+            legacy_path = f"{SANDBOX_WORKSPACE}/{legacy_name}"
+            content = sandbox.files.read(legacy_path)
         
         # Determine content type based on extension
         ext = Path(file_path).suffix.lower()

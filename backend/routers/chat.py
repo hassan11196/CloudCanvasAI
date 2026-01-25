@@ -30,9 +30,9 @@ from claude_agent_sdk import (
 
 from sandbox_manager import SandboxManager, SANDBOX_ROOT, SANDBOX_WORKSPACE
 from session_files import (
-    session_prefix,
     session_storage_path,
     session_logical_path,
+    session_workspace_dir,
     is_session_file,
 )
 from auth import get_current_user
@@ -121,6 +121,7 @@ def get_or_create_session(
                 getattr(sandbox, "sandbox_id", "unknown"),
             )
             return session_id, sandbox
+
         sandbox = sandbox_manager.create_sandbox(user_id)
         print(
             "[stream] created sandbox for session duration=%.3fs sandbox_id=%s",
@@ -131,6 +132,7 @@ def get_or_create_session(
 
     # Create new session with E2B sandbox
     new_id = str(uuid.uuid4())
+
     sandbox = sandbox_manager.create_sandbox(user_id)
     print(
         "[stream] created sandbox new session duration=%.3fs sandbox_id=%s",
@@ -192,18 +194,19 @@ def get_file_path_from_tool(tool_name: str, tool_input: dict) -> Optional[str]:
 def scan_for_new_documents(sandbox, known_files: set, session_id: str) -> list[str]:
     """Scan E2B sandbox for new document files in the session workspace."""
     new_files = []
-    scan_dir = SANDBOX_WORKSPACE
+    scan_dir = session_workspace_dir(session_id)
     try:
-        entries = _iter_sandbox_files(sandbox, scan_dir, base_root=SANDBOX_ROOT)
+        entries = _iter_sandbox_files(sandbox, scan_dir, base_root=SANDBOX_WORKSPACE)
         for rel_path, is_dir in entries:
             if is_dir:
                 continue
-            filename = PurePosixPath(rel_path).name
-            if not is_session_file(session_id, filename):
+            if not is_session_file(session_id, rel_path):
                 continue
-            if not any(filename.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
+            logical_name = session_logical_path(session_id, rel_path)
+            if not logical_name:
                 continue
-            logical_name = session_logical_path(session_id, filename)
+            if not any(logical_name.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
+                continue
             if logical_name not in known_files:
                 new_files.append(logical_name)
                 known_files.add(logical_name)
@@ -348,6 +351,12 @@ def _build_sandbox_mcp_server(sandbox, session_id: str):
         "required": ["command"],
     }
 
+    def _ensure_session_dir():
+        try:
+            sandbox.files.make_dir(session_workspace_dir(session_id))
+        except Exception:
+            pass
+
     @tool("Read", "Read a file from the sandbox filesystem", read_schema)
     async def read_tool(args):
         try:
@@ -381,7 +390,13 @@ def _build_sandbox_mcp_server(sandbox, session_id: str):
             file_path = _extract_tool_path(args)
             if not file_path:
                 raise ValueError("file_path is required")
+            _ensure_session_dir()
             target_path = session_storage_path(session_id, file_path)
+            target_parent = PurePosixPath(target_path).parent
+            try:
+                sandbox.files.make_dir(str(target_parent))
+            except Exception:
+                pass
             content = args.get("content", "")
             sandbox.files.write(target_path, content)
             return {"content": [{"type": "text", "text": f"Wrote {target_path}"}]}
@@ -491,11 +506,12 @@ def _build_sandbox_mcp_server(sandbox, session_id: str):
             if not command:
                 return {"content": [{"type": "text", "text": "(no command provided)"}]}
 
+            _ensure_session_dir()
             # Use E2B's native command execution
             result = sandbox.commands.run(
                 command,
                 timeout=120,
-                cwd=SANDBOX_WORKSPACE,
+                cwd=session_workspace_dir(session_id),
                 envs={
                     "TMPDIR": f"{SANDBOX_ROOT}/tmp",
                     "NODE_PATH": "/usr/local/lib/node_modules",
@@ -570,8 +586,9 @@ async def agent_event_generator(
         f"{SANDBOX_ROOT}/scripts/create_docx.py"
     )
     system_prompt += (
-        f"\n\nSession file rule: store generated files in {SANDBOX_WORKSPACE} "
-        f"and prefix filenames with '{session_prefix(sid)}'."
+        f"\n\nSession file rule: store generated files in {session_workspace_dir(sid)} "
+        "without including the session ID in filenames. Create the session folder if needed."
+        "\nWhen starting document creation, emit a status update labelled 'doc_generation_requested' along with the intended document name."
     )
 
     sandbox_server = _build_sandbox_mcp_server(sandbox, sid) if sandbox else None
@@ -584,7 +601,7 @@ async def agent_event_generator(
     options = ClaudeAgentOptions(
         tools=[],
         allowed_tools=DOCUMENT_TOOLS if sandbox_server else [],
-        permission_mode="bypassPermissions",
+        permission_mode="dontAsk",
         cwd=None,
         resume=sid if is_resume else None,
         continue_conversation=is_resume,
@@ -605,19 +622,29 @@ async def agent_event_generator(
     # Track pending tool uses by ID
     pending_tool_uses = {}
     known_files = set()
+    doc_generation_announced: set[str] = set()
     
     # Get initial file list from E2B sandbox
     if sandbox:
         try:
-            entries = _iter_sandbox_files(sandbox, SANDBOX_WORKSPACE, base_root=SANDBOX_ROOT)
+            try:
+                sandbox.files.make_dir(session_workspace_dir(sid))
+            except Exception:
+                pass
+
+            entries = _iter_sandbox_files(
+                sandbox,
+                session_workspace_dir(sid),
+                base_root=SANDBOX_WORKSPACE,
+            )
             for rel_path, is_dir in entries:
                 if is_dir:
                     continue
-                filename = PurePosixPath(rel_path).name
-                if not is_session_file(sid, filename):
+                if not is_session_file(sid, rel_path):
                     continue
-                if any(filename.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
-                    known_files.add(session_logical_path(sid, filename))
+                logical_path = session_logical_path(sid, rel_path)
+                if any(logical_path.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
+                    known_files.add(logical_path)
         except Exception as e:
             print(f"Error listing initial files: {e}")
 
@@ -634,6 +661,19 @@ async def agent_event_generator(
                             'name': block.name,
                             'input': block.input
                         }
+
+                        file_path = get_file_path_from_tool(block.name, block.input)
+                        if file_path and is_document_file(file_path):
+                            logical_path = session_logical_path(sid, file_path)
+                            if logical_path and logical_path not in doc_generation_announced:
+                                doc_generation_announced.add(logical_path)
+                                status_event = {
+                                    'type': 'status',
+                                    'content': 'doc_generation_requested',
+                                    'path': logical_path,
+                                }
+                                yield f"data: {json.dumps(status_event)}\n\n"
+
                         event = {
                             'type': 'tool_use',
                             'tool_name': block.name,
@@ -662,6 +702,14 @@ async def agent_event_generator(
                                     action = "modified"
 
                                 logical_path = session_logical_path(sid, file_path)
+                                if logical_path and logical_path not in doc_generation_announced and is_document_file(logical_path):
+                                    doc_generation_announced.add(logical_path)
+                                    status_event = {
+                                        'type': 'status',
+                                        'content': 'doc_generation_requested',
+                                        'path': logical_path,
+                                    }
+                                    yield f"data: {json.dumps(status_event)}\n\n"
                                 file_event = {
                                     'type': 'file_change',
                                     'path': logical_path,
@@ -676,6 +724,14 @@ async def agent_event_generator(
                                 new_docs = scan_for_new_documents(sandbox, known_files, sid)
                                 print(f"DEBUG: Scanned new docs: {new_docs}")
                                 for doc_path in new_docs:
+                                    if doc_path not in doc_generation_announced and is_document_file(doc_path):
+                                        doc_generation_announced.add(doc_path)
+                                        status_event = {
+                                            'type': 'status',
+                                            'content': 'doc_generation_requested',
+                                            'path': doc_path,
+                                        }
+                                        yield f"data: {json.dumps(status_event)}\n\n"
                                     file_event = {
                                         'type': 'file_change',
                                         'path': doc_path,
