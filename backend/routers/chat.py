@@ -546,6 +546,7 @@ async def agent_event_generator(
 
     def _stderr_callback(line: str) -> None:
         stderr_lines.append(line)
+        print(f"STDERR: {line}")
 
     options = ClaudeAgentOptions(
         tools=[],
