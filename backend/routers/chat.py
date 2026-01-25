@@ -122,37 +122,83 @@ class ChatMessage(BaseModel):
 def get_file_path_from_tool(tool_name: str, tool_input: dict) -> Optional[str]:
     """Extract file path from Write, Edit, or Bash tool input."""
     import re
+    import shlex
 
     if tool_name in ("Write", "Edit", "write_to_file", "replace_file_content", "multi_replace_file_content"):
         return tool_input.get("file_path") or tool_input.get("TargetFile") or tool_input.get("path")
     elif tool_name in ("Bash", "run_command"):
         command = tool_input.get("command") or tool_input.get("CommandLine") or ""
-        # Check if this is a create_docx.py command
+
+        # Try to extract document files from command
+        # Match quoted paths: "path/file.docx" or 'path/file.docx'
+        quoted_match = re.search(r'''["']([^"']*\.(?:docx|pptx|xlsx|pdf))["']''', command)
+        if quoted_match:
+            return quoted_match.group(1)
+
+        # Match unquoted paths, but more carefully
+        # Look for word boundaries and path-like strings
+        unquoted_match = re.search(r'(?:^|\s)([./\w-]+\.(?:docx|pptx|xlsx|pdf))(?:\s|$)', command)
+        if unquoted_match:
+            path = unquoted_match.group(1)
+            # Filter out common false positives like flags
+            if not path.startswith('-'):
+                return path
+
+        # Special handling for create_docx.py - first argument is usually the output
         if "create_docx.py" in command:
-            # Extract the output filename - look for .docx file in command
-            docx_match = re.search(r'(\S+\.docx)', command)
-            if docx_match:
-                return docx_match.group(1)
-        doc_match = re.search(r"(\S+\.(?:docx|pptx|xlsx|pdf))", command)
-        if doc_match:
-            return doc_match.group(1)
+            try:
+                # Use shlex to properly parse the command
+                parts = shlex.split(command)
+                # Find index of create_docx.py
+                idx = next((i for i, p in enumerate(parts) if "create_docx.py" in p), None)
+                if idx is not None and idx + 1 < len(parts):
+                    # Next argument is typically the output file
+                    potential_path = parts[idx + 1]
+                    if potential_path.endswith(('.docx', '.pptx', '.xlsx', '.pdf')):
+                        return potential_path
+            except ValueError:
+                # shlex.split can fail on malformed commands, fall back to regex
+                pass
+
     return None
 
 
 def scan_for_new_documents(sandbox, known_files: set) -> list[str]:
-    """Scan E2B sandbox for any new document files."""
+    """Scan E2B sandbox for any new document files in workspace and tmp directories."""
     new_files = []
-    try:
-        entries = _iter_sandbox_files(sandbox, SANDBOX_ROOT)
-        for rel_path, is_dir in entries:
-            if is_dir:
-                continue
-            if any(rel_path.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
-                if rel_path not in known_files:
-                    new_files.append(rel_path)
-                    known_files.add(rel_path)
-    except Exception as e:
-        print(f"Error scanning for documents: {e}")
+    # Only scan specific directories where documents are likely to be created
+    scan_dirs = [
+        f"{SANDBOX_ROOT}/workspace",
+        f"{SANDBOX_ROOT}/tmp",
+        SANDBOX_ROOT,  # Top-level only
+    ]
+
+    for scan_dir in scan_dirs:
+        try:
+            # For SANDBOX_ROOT, only check top-level files, not subdirectories
+            if scan_dir == SANDBOX_ROOT:
+                entries = sandbox.files.list(scan_dir)
+                for entry in entries:
+                    if entry.type != "dir":
+                        rel_path = entry.name
+                        if any(rel_path.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
+                            if rel_path not in known_files:
+                                new_files.append(rel_path)
+                                known_files.add(rel_path)
+            else:
+                # For workspace/tmp, scan recursively but with depth limit
+                entries = _iter_sandbox_files(sandbox, scan_dir, base_root=SANDBOX_ROOT)
+                for rel_path, is_dir in entries:
+                    if is_dir:
+                        continue
+                    if any(rel_path.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
+                        if rel_path not in known_files:
+                            new_files.append(rel_path)
+                            known_files.add(rel_path)
+        except Exception as e:
+            # Directory might not exist yet, that's okay
+            continue
+
     return new_files
 
 
@@ -165,12 +211,8 @@ def is_document_file(file_path: str) -> bool:
 
 
 def _extract_tool_path(tool_input: dict) -> Optional[str]:
-    return (
-        tool_input.get("file_path")
-        or tool_input.get("path")
-        or tool_input.get("TargetFile")
-        or tool_input.get("target_file")
-    )
+    """Extract file_path from tool input, supporting legacy parameter names."""
+    return tool_input.get("file_path") or tool_input.get("path")
 
 
 def _resolve_sandbox_path(path: Optional[str]) -> str:
@@ -208,55 +250,90 @@ def _build_sandbox_mcp_server(sandbox):
     read_schema = {
         "type": "object",
         "properties": {
-            "file_path": {"type": "string"},
-            "path": {"type": "string"},
+            "file_path": {
+                "type": "string",
+                "description": "Path to the file to read"
+            },
         },
+        "required": ["file_path"],
     }
     write_schema = {
         "type": "object",
         "properties": {
-            "file_path": {"type": "string"},
-            "path": {"type": "string"},
-            "content": {"type": "string"},
+            "file_path": {
+                "type": "string",
+                "description": "Path to the file to write"
+            },
+            "content": {
+                "type": "string",
+                "description": "Content to write to the file"
+            },
         },
+        "required": ["file_path", "content"],
     }
     edit_schema = {
         "type": "object",
         "properties": {
-            "file_path": {"type": "string"},
-            "path": {"type": "string"},
-            "content": {"type": "string"},
+            "file_path": {
+                "type": "string",
+                "description": "Path to the file to edit"
+            },
+            "content": {
+                "type": "string",
+                "description": "New content (if replacing entire file)"
+            },
             "edits": {
                 "type": "array",
+                "description": "List of text replacements to apply",
                 "items": {
                     "type": "object",
                     "properties": {
                         "old_text": {"type": "string"},
                         "new_text": {"type": "string"},
                     },
+                    "required": ["old_text", "new_text"],
                 },
             },
         },
+        "required": ["file_path"],
     }
     glob_schema = {
         "type": "object",
         "properties": {
-            "pattern": {"type": "string"},
-            "path": {"type": "string"},
+            "pattern": {
+                "type": "string",
+                "description": "Glob pattern to match files"
+            },
+            "path": {
+                "type": "string",
+                "description": "Directory to search in (optional, defaults to sandbox root)"
+            },
         },
+        "required": ["pattern"],
     }
     grep_schema = {
         "type": "object",
         "properties": {
-            "pattern": {"type": "string"},
-            "path": {"type": "string"},
+            "pattern": {
+                "type": "string",
+                "description": "Regular expression pattern to search for"
+            },
+            "path": {
+                "type": "string",
+                "description": "Directory to search in (optional, defaults to sandbox root)"
+            },
         },
+        "required": ["pattern"],
     }
     bash_schema = {
         "type": "object",
         "properties": {
-            "command": {"type": "string"},
+            "command": {
+                "type": "string",
+                "description": "Shell command to execute"
+            },
         },
+        "required": ["command"],
     }
 
     @tool("Read", "Read a file from the sandbox filesystem", read_schema)
@@ -382,32 +459,36 @@ def _build_sandbox_mcp_server(sandbox):
     async def bash_tool(args):
         try:
             command = args.get("command", "")
+            if not command:
+                return {"content": [{"type": "text", "text": "(no command provided)"}]}
+
+            # Use native E2B command execution instead of subprocess wrapper
             sandbox_tmp = f"{SANDBOX_ROOT}/tmp"
-            python_code = (
-                "import os, subprocess, json\n"
-                f"cmd = {json.dumps(command)}\n"
-                "env = os.environ.copy()\n"
-                f"env['TMPDIR'] = {json.dumps(sandbox_tmp)}\n"
-                # Set NODE_PATH for globally installed npm packages
-                "node_paths = ['/usr/lib/node_modules', '/usr/local/lib/node_modules']\n"
-                "existing_node_path = env.get('NODE_PATH', '')\n"
-                "env['NODE_PATH'] = ':'.join([p for p in node_paths + [existing_node_path] if p])\n"
-                f"cwd = {json.dumps(SANDBOX_ROOT)}\n"
-                "shell = '/bin/bash' if os.path.exists('/bin/bash') else '/bin/sh'\n"
-                "try:\n"
-                "    result = subprocess.run([shell, '-lc', cmd], capture_output=True, text=True, env=env, cwd=cwd, timeout=120)\n"
-                "    print(f'Exit code: {result.returncode}')\n"
-                "    print(result.stdout, end='')\n"
-                "    print(result.stderr, end='')\n"
-                "except subprocess.TimeoutExpired:\n"
-                "    print('Error: Command timed out after 120 seconds')\n"
+            env = {
+                "TMPDIR": sandbox_tmp,
+                "NODE_PATH": "/usr/local/lib/node_modules",
+            }
+
+            result = sandbox.commands.run(
+                command,
+                timeout=120,
+                cwd=SANDBOX_ROOT,
+                env_vars=env,
             )
-            execution = sandbox.run_code(python_code)
-            output = ""
-            if execution.logs.stdout:
-                output += "\n".join(execution.logs.stdout)
-            if execution.logs.stderr:
-                output += "\n".join(execution.logs.stderr)
+
+            # Build output from result
+            output_parts = []
+            if result.stdout:
+                output_parts.append(result.stdout)
+            if result.stderr:
+                output_parts.append(result.stderr)
+
+            output = "\n".join(output_parts) if output_parts else "(no output)"
+
+            # Include exit code if non-zero
+            if result.exit_code != 0:
+                output = f"Exit code: {result.exit_code}\n{output}"
+
             return {"content": [{"type": "text", "text": output}]}
         except Exception as exc:
             return {

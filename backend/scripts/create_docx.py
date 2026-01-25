@@ -96,26 +96,84 @@ def create_document(output_path: str, content: dict) -> str:
     return output_path
 
 
+def validate_content(content: dict) -> None:
+    """Validate document content structure.
+
+    Args:
+        content: Document content dictionary
+
+    Raises:
+        ValueError: If content structure is invalid
+    """
+    if not isinstance(content, dict):
+        raise ValueError("Content must be a dictionary")
+
+    # Validate sections if present
+    sections = content.get("sections", [])
+    if not isinstance(sections, list):
+        raise ValueError("Sections must be a list")
+
+    if len(sections) > 1000:
+        raise ValueError("Too many sections (max 1000)")
+
+    for idx, section in enumerate(sections):
+        if not isinstance(section, dict):
+            raise ValueError(f"Section {idx} must be a dictionary")
+
+        # Validate section content size
+        if "content" in section:
+            content_text = section["content"]
+            if isinstance(content_text, str) and len(content_text) > 100000:
+                raise ValueError(f"Section {idx} content too large (max 100KB)")
+            elif isinstance(content_text, list) and len(content_text) > 100:
+                raise ValueError(f"Section {idx} has too many paragraphs (max 100)")
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage: python create_docx.py <output_path> <json_content>")
         print("Or: python create_docx.py <output_path> --file <json_file>")
         sys.exit(1)
 
-    output_path = sys.argv[1]
+    try:
+        output_path = sys.argv[1]
 
-    # Check if reading from file
-    if len(sys.argv) >= 4 and sys.argv[2] == "--file":
-        json_file = sys.argv[3]
-        with open(json_file, "r") as f:
-            content = json.load(f)
-    else:
-        # Parse JSON from command line
-        json_str = sys.argv[2]
-        content = json.loads(json_str)
+        # Check if reading from file
+        if len(sys.argv) >= 4 and sys.argv[2] == "--file":
+            json_file = sys.argv[3]
+            # Check file size before reading
+            file_size = Path(json_file).stat().st_size
+            if file_size > 10 * 1024 * 1024:  # 10 MB
+                print(f"Error: JSON file too large ({file_size} bytes, max 10MB)")
+                sys.exit(1)
 
-    result = create_document(output_path, content)
-    print(f"Document created: {result}")
+            with open(json_file, "r", encoding="utf-8") as f:
+                content = json.load(f)
+        else:
+            # Parse JSON from command line
+            json_str = sys.argv[2]
+            # Limit JSON string size
+            if len(json_str) > 1024 * 1024:  # 1 MB
+                print(f"Error: JSON string too large ({len(json_str)} bytes, max 1MB)")
+                sys.exit(1)
+
+            content = json.loads(json_str)
+
+        # Validate content structure
+        validate_content(content)
+
+        result = create_document(output_path, content)
+        print(f"Document created: {result}")
+
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON - {e}")
+        sys.exit(1)
+    except ValueError as e:
+        print(f"Error: Invalid content - {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

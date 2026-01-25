@@ -1,11 +1,14 @@
 import os
+import logging
 from pathlib import Path
 from typing import Optional, Dict
-import shutil
 from e2b_code_interpreter import Sandbox
 from firebase_admin import firestore
 
 from firebase_admin_client import get_firestore_client
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 SANDBOX_ROOT = "/home/user"
 SANDBOX_TMP = f"{SANDBOX_ROOT}/tmp"
@@ -42,32 +45,62 @@ class SandboxManager:
             )
         
         if user_id in self.sandboxes:
+            logger.info(f"Reusing existing sandbox for user {user_id}")
             return self.sandboxes[user_id]
 
         sandbox = None
         doc_ref = self.firestore.collection("user_sandboxes").document(user_id)
-        doc = doc_ref.get()
-        if doc.exists:
-            data = doc.to_dict() or {}
-            sandbox_id = data.get("sandbox_id")
-            if sandbox_id:
-                try:
-                    sandbox = Sandbox.connect(sandbox_id, timeout=self.sandbox_timeout)
-                except Exception:
-                    sandbox = None
 
+        # Try to reconnect to existing sandbox
+        try:
+            doc = doc_ref.get()
+            if doc.exists:
+                data = doc.to_dict() or {}
+                sandbox_id = data.get("sandbox_id")
+                if sandbox_id:
+                    logger.info(f"Attempting to reconnect to sandbox {sandbox_id} for user {user_id}")
+                    try:
+                        sandbox = Sandbox.connect(sandbox_id, timeout=self.sandbox_timeout)
+                        logger.info(f"Successfully reconnected to sandbox {sandbox_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to reconnect to sandbox {sandbox_id}: {e}")
+                        # Clean up stale Firestore record
+                        try:
+                            doc_ref.delete()
+                            logger.info(f"Deleted stale sandbox record for user {user_id}")
+                        except Exception as cleanup_error:
+                            logger.error(f"Failed to delete stale record: {cleanup_error}")
+                        sandbox = None
+        except Exception as e:
+            logger.error(f"Error querying Firestore for user {user_id}: {e}")
+
+        # Create new sandbox if reconnection failed
         if sandbox is None:
-            sandbox = Sandbox.create(
-                timeout=self.sandbox_timeout,
-                template=self.template,
-            )
-            doc_ref.set(
-                {
-                    "sandbox_id": sandbox.sandbox_id,
-                    "updated_at": firestore.SERVER_TIMESTAMP,
-                },
-                merge=True,
-            )
+            logger.info(f"Creating new sandbox for user {user_id}")
+            try:
+                sandbox = Sandbox.create(
+                    timeout=self.sandbox_timeout,
+                    template=self.template,
+                )
+                logger.info(f"Created sandbox {sandbox.sandbox_id} for user {user_id}")
+
+                # Store sandbox ID in Firestore
+                try:
+                    doc_ref.set(
+                        {
+                            "sandbox_id": sandbox.sandbox_id,
+                            "updated_at": firestore.SERVER_TIMESTAMP,
+                        },
+                        merge=True,
+                    )
+                    logger.info(f"Stored sandbox ID in Firestore for user {user_id}")
+                except Exception as e:
+                    logger.error(f"Failed to store sandbox ID in Firestore: {e}")
+                    # Continue anyway - sandbox is created, just not persisted
+
+            except Exception as e:
+                logger.error(f"Failed to create sandbox for user {user_id}: {e}")
+                raise RuntimeError(f"Failed to create sandbox: {e}")
         
         # Initialize sandbox with template files
         self._initialize_sandbox(sandbox)
@@ -104,70 +137,212 @@ class SandboxManager:
 
     def _initialize_sandbox(self, sandbox: Sandbox):
         """Initialize sandbox with template files, scripts, and skills."""
+        logger.info("Initializing sandbox with template files")
         self._ensure_root_dir(sandbox)
 
         # Copy template data files
         if self.data_dir.exists():
+            file_count = 0
             for file_path in self.data_dir.glob("*"):
                 if file_path.is_file():
-                    content = file_path.read_text()
-                    sandbox.files.write(f"{SANDBOX_ROOT}/{file_path.name}", content)
-        
+                    try:
+                        content = file_path.read_bytes()
+                        sandbox.files.write(f"{SANDBOX_ROOT}/{file_path.name}", content)
+                        file_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to copy data file {file_path.name}: {e}")
+            logger.info(f"Copied {file_count} template data files")
+
         # Copy scripts
         if self.scripts_dir.exists():
-            sandbox.files.make_dir(f"{SANDBOX_ROOT}/scripts")
+            try:
+                sandbox.files.make_dir(f"{SANDBOX_ROOT}/scripts")
+            except Exception:
+                pass  # Directory may already exist
+
+            script_count = 0
             for file_path in self.scripts_dir.glob("*.py"):
                 if file_path.is_file():
-                    content = file_path.read_text()
-                    sandbox.files.write(f"{SANDBOX_ROOT}/scripts/{file_path.name}", content)
-        
+                    try:
+                        content = file_path.read_bytes()
+                        sandbox.files.write(f"{SANDBOX_ROOT}/scripts/{file_path.name}", content)
+                        script_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to copy script {file_path.name}: {e}")
+            logger.info(f"Copied {script_count} script files")
+
         # Copy skills directory
         if self.skills_dir.exists():
+            logger.info("Copying skills directory")
             self._copy_directory_to_sandbox(sandbox, self.skills_dir, f"{SANDBOX_ROOT}/skills")
+            logger.info("Sandbox initialization complete")
     
     def _copy_directory_to_sandbox(self, sandbox: Sandbox, local_dir: Path, remote_path: str):
         """Recursively copy a directory to the sandbox."""
+        try:
+            sandbox.files.make_dir(remote_path)
+        except Exception:
+            pass  # Directory may already exist
+
         for item in local_dir.iterdir():
             remote_item_path = f"{remote_path}/{item.name}"
-            
+
             if item.is_file():
-                content = item.read_text()
-                sandbox.files.write(remote_item_path, content)
+                try:
+                    content = item.read_bytes()
+                    sandbox.files.write(remote_item_path, content)
+                except Exception as e:
+                    logger.warning(f"Failed to copy {item.name} to sandbox: {e}")
             elif item.is_dir():
-                sandbox.files.make_dir(remote_item_path)
                 self._copy_directory_to_sandbox(sandbox, item, remote_item_path)
     
     def write_file(self, sandbox: Sandbox, path: str, content: str):
-        """Write a file to the sandbox."""
-        sandbox.files.write(path, content)
-    
+        """Write a file to the sandbox.
+
+        Args:
+            sandbox: The sandbox instance
+            path: Path within sandbox (must not escape SANDBOX_ROOT)
+            content: File content (string or bytes)
+
+        Raises:
+            ValueError: If path is invalid or escapes sandbox root
+            RuntimeError: If sandbox is not running or write fails
+        """
+        if not sandbox:
+            raise RuntimeError("Sandbox is not initialized")
+
+        # Validate path doesn't escape sandbox root
+        if ".." in path or path.startswith("/"):
+            # Normalize and check
+            from pathlib import PurePosixPath
+            normalized = str(PurePosixPath(SANDBOX_ROOT) / path)
+            if not normalized.startswith(SANDBOX_ROOT):
+                raise ValueError(f"Path escapes sandbox root: {path}")
+
+        try:
+            if not sandbox.is_running():
+                raise RuntimeError("Sandbox is not running")
+            sandbox.files.write(path, content)
+        except Exception as e:
+            raise RuntimeError(f"Failed to write file {path}: {e}")
+
     def read_file(self, sandbox: Sandbox, path: str) -> str:
-        """Read a file from the sandbox."""
-        return sandbox.files.read(path)
-    
+        """Read a file from the sandbox.
+
+        Args:
+            sandbox: The sandbox instance
+            path: Path within sandbox
+
+        Returns:
+            File content as string
+
+        Raises:
+            RuntimeError: If sandbox is not running or read fails
+        """
+        if not sandbox:
+            raise RuntimeError("Sandbox is not initialized")
+
+        try:
+            if not sandbox.is_running():
+                raise RuntimeError("Sandbox is not running")
+            return sandbox.files.read(path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to read file {path}: {e}")
+
     def list_files(self, sandbox: Sandbox, path: str = SANDBOX_ROOT) -> list:
-        """List files in the sandbox directory."""
-        return sandbox.files.list(path)
-    
-    def execute_command(self, sandbox: Sandbox, command: str) -> str:
-        """Execute a bash command in the sandbox."""
-        execution = sandbox.run_code(command)
-        
-        # Combine stdout and stderr
-        output = ""
-        if execution.logs.stdout:
-            output += "\n".join(execution.logs.stdout)
-        if execution.logs.stderr:
-            output += "\n".join(execution.logs.stderr)
-        
-        return output
+        """List files in the sandbox directory.
+
+        Args:
+            sandbox: The sandbox instance
+            path: Directory path within sandbox
+
+        Returns:
+            List of file entries
+
+        Raises:
+            RuntimeError: If sandbox is not running or list fails
+        """
+        if not sandbox:
+            raise RuntimeError("Sandbox is not initialized")
+
+        try:
+            if not sandbox.is_running():
+                raise RuntimeError("Sandbox is not running")
+            return sandbox.files.list(path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to list directory {path}: {e}")
+
+    def execute_command(self, sandbox: Sandbox, command: str, timeout: int = 120) -> str:
+        """Execute a bash command in the sandbox.
+
+        Args:
+            sandbox: The sandbox instance
+            command: Command to execute
+            timeout: Timeout in seconds (default: 120)
+
+        Returns:
+            Combined stdout and stderr output
+
+        Raises:
+            RuntimeError: If sandbox is not running or execution fails
+        """
+        if not sandbox:
+            raise RuntimeError("Sandbox is not initialized")
+
+        try:
+            if not sandbox.is_running():
+                raise RuntimeError("Sandbox is not running")
+
+            result = sandbox.commands.run(
+                command,
+                timeout=timeout,
+                cwd=SANDBOX_ROOT,
+            )
+
+            # Combine stdout and stderr
+            output_parts = []
+            if result.stdout:
+                output_parts.append(result.stdout)
+            if result.stderr:
+                output_parts.append(result.stderr)
+
+            output = "\n".join(output_parts) if output_parts else ""
+
+            # Include exit code if non-zero
+            if result.exit_code != 0:
+                output = f"Exit code: {result.exit_code}\n{output}"
+
+            return output
+        except Exception as e:
+            raise RuntimeError(f"Failed to execute command: {e}")
     
     def close_sandbox(self, user_id: str):
-        """Close and cleanup a sandbox."""
+        """Close and cleanup a sandbox.
+
+        Args:
+            user_id: User ID whose sandbox should be closed
+        """
         if user_id in self.sandboxes:
             sandbox = self.sandboxes[user_id]
-            sandbox.close()
+            sandbox_id = getattr(sandbox, 'sandbox_id', 'unknown')
+
+            try:
+                logger.info(f"Closing sandbox {sandbox_id} for user {user_id}")
+                sandbox.close()
+                logger.info(f"Successfully closed sandbox {sandbox_id}")
+            except Exception as e:
+                logger.error(f"Error closing sandbox {sandbox_id}: {e}")
+
+            # Remove from in-memory cache regardless of close result
             del self.sandboxes[user_id]
+
+            # Clean up Firestore record
+            try:
+                doc_ref = self.firestore.collection("user_sandboxes").document(user_id)
+                doc_ref.delete()
+                logger.info(f"Deleted Firestore record for user {user_id}")
+            except Exception as e:
+                logger.error(f"Failed to delete Firestore record for user {user_id}: {e}")
     
     def close_all(self):
         """Close all sandboxes."""
