@@ -293,24 +293,57 @@ class SandboxManager:
             if not sandbox.is_running():
                 raise RuntimeError("Sandbox is not running")
 
-            result = sandbox.commands.run(
-                command,
-                timeout=timeout,
-                cwd=SANDBOX_ROOT,
-            )
+            # E2B Code Interpreter only supports run_code() for Python
+            # So we execute bash commands via Python subprocess
+            python_code = f'''
+import subprocess
+import os
+
+env = os.environ.copy()
+env["TMPDIR"] = "{SANDBOX_TMP}"
+env["NODE_PATH"] = "/usr/local/lib/node_modules"
+
+try:
+    result = subprocess.run(
+        ["bash", "-c", {repr(command)}],
+        capture_output=True,
+        text=True,
+        cwd="{SANDBOX_ROOT}",
+        env=env,
+        timeout={timeout}
+    )
+
+    output = []
+    if result.stdout:
+        output.append(result.stdout)
+    if result.stderr:
+        output.append(result.stderr)
+
+    if result.returncode != 0 and not result.stderr:
+        output.append(f"Command exited with code {{result.returncode}}")
+
+    print("\\n".join(output) if output else "")
+
+except subprocess.TimeoutExpired:
+    print(f"Error: Command timed out after {timeout} seconds")
+except Exception as e:
+    print(f"Error: {{type(e).__name__}}: {{e}}")
+'''
+
+            execution = sandbox.run_code(python_code)
 
             # Combine stdout and stderr
             output_parts = []
-            if result.stdout:
-                output_parts.append(result.stdout)
-            if result.stderr:
-                output_parts.append(result.stderr)
+            if execution.logs.stdout:
+                output_parts.extend(execution.logs.stdout)
+            if execution.logs.stderr:
+                output_parts.extend(execution.logs.stderr)
 
             output = "\n".join(output_parts) if output_parts else ""
 
-            # Include exit code if non-zero
-            if result.exit_code != 0:
-                output = f"Exit code: {result.exit_code}\n{output}"
+            # Check for execution errors
+            if execution.error and not output.strip():
+                output = f"Execution error: {execution.error}"
 
             return output
         except Exception as e:
