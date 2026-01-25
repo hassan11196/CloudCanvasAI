@@ -191,10 +191,11 @@ class SandboxManager:
                         logger.warning(f"Failed to copy script {file_path.name}: {e}")
             logger.info(f"Copied {script_count} script files")
 
-        # Copy skills directory
+        # Copy skills directory to Claude SDK location
         if self.skills_dir.exists():
-            logger.info("Copying skills directory")
-            self._copy_directory_to_sandbox(sandbox, self.skills_dir, f"{SANDBOX_ROOT}/skills")
+            logger.info("Copying skills directory to Claude SDK location")
+            # Copy to the primary Claude SDK skills directory
+            self._copy_directory_to_sandbox(sandbox, self.skills_dir, "/etc/claude-code/.claude/skills")
             logger.info("Sandbox initialization complete")
     
     def _copy_directory_to_sandbox(self, sandbox: Sandbox, local_dir: Path, remote_path: str):
@@ -313,57 +314,33 @@ class SandboxManager:
             if not sandbox.is_running():
                 raise RuntimeError("Sandbox is not running")
 
-            # E2B Code Interpreter only supports run_code() for Python
-            # So we execute bash commands via Python subprocess
-            python_code = f'''
-import subprocess
-import os
-
-env = os.environ.copy()
-env["TMPDIR"] = "{SANDBOX_TMP}"
-env["NODE_PATH"] = "/usr/local/lib/node_modules"
-
-try:
-    result = subprocess.run(
-        ["bash", "-c", {repr(command)}],
-        capture_output=True,
-        text=True,
-        cwd="{SANDBOX_ROOT}",
-        env=env,
-        timeout={timeout}
-    )
-
-    output = []
-    if result.stdout:
-        output.append(result.stdout)
-    if result.stderr:
-        output.append(result.stderr)
-
-    if result.returncode != 0 and not result.stderr:
-        output.append(f"Command exited with code {{result.returncode}}")
-
-    print("\\n".join(output) if output else "")
-
-except subprocess.TimeoutExpired:
-    print(f"Error: Command timed out after {timeout} seconds")
-except Exception as e:
-    print(f"Error: {{type(e).__name__}}: {{e}}")
-'''
-
-            execution = sandbox.run_code(python_code)
+            # Use E2B's native command execution
+            result = sandbox.commands.run(
+                command,
+                timeout=timeout,
+                cwd=SANDBOX_ROOT,
+                envs={
+                    "TMPDIR": SANDBOX_TMP,
+                    "NODE_PATH": "/usr/local/lib/node_modules",
+                },
+            )
 
             # Combine stdout and stderr
             output_parts = []
-            if execution.logs.stdout:
-                output_parts.extend(execution.logs.stdout)
-            if execution.logs.stderr:
-                output_parts.extend(execution.logs.stderr)
+            if result.stdout:
+                output_parts.append(result.stdout)
+            if result.stderr:
+                output_parts.append(result.stderr)
 
             output = "\n".join(output_parts) if output_parts else ""
 
-            # Check for execution errors
-            if execution.error and not output.strip():
-                output = f"Execution error: {execution.error}"
+            # Include exit code if command failed
+            if result.exit_code != 0 and not output:
+                output = f"Command exited with code {result.exit_code}"
+
+            # Include error if present
+            if result.error:
+                output = f"Error: {result.error}\n{output}" if output else f"Error: {result.error}"
 
             return output
         except Exception as e:

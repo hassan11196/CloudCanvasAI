@@ -46,9 +46,9 @@ You are Zephior, an AI assistant with document creation capabilities.
 """
 SKILL_NAMES = ("docx", "pdf", "pptx", "xlsx")
 SKILL_PATH_NOTE = (
-    "Skill assets are available under /skills/{docx,pdf,pptx,xlsx}. "
+    "Skill assets are available under /etc/claude-code/.claude/skills/{docx,pdf,pptx,xlsx}. "
     "When instructions reference relative paths like ooxml/scripts or scripts/thumbnail.py, "
-    "run them from the appropriate skill directory or use absolute paths under /skills. "
+    "run them from the appropriate skill directory or use absolute paths under /etc/claude-code/.claude/skills. "
     "Use /home/user/workspace for working files and /home/user/tmp for temporary files. "
     "If Node.js or docx-js dependencies are unavailable, prefer /home/user/scripts/create_docx.py "
     "to generate .docx files."
@@ -195,7 +195,7 @@ def scan_for_new_documents(sandbox, known_files: set) -> list[str]:
                         if rel_path not in known_files:
                             new_files.append(rel_path)
                             known_files.add(rel_path)
-        except Exception as e:
+        except Exception:
             # Directory might not exist yet, that's okay
             continue
 
@@ -462,21 +462,18 @@ def _build_sandbox_mcp_server(sandbox):
             if not command:
                 return {"content": [{"type": "text", "text": "(no command provided)"}]}
 
-            # Use native E2B command execution instead of subprocess wrapper
-            sandbox_tmp = f"{SANDBOX_ROOT}/tmp"
-            env = {
-                "TMPDIR": sandbox_tmp,
-                "NODE_PATH": "/usr/local/lib/node_modules",
-            }
-
+            # Use E2B's native command execution
             result = sandbox.commands.run(
                 command,
                 timeout=120,
                 cwd=SANDBOX_ROOT,
-                env_vars=env,
+                envs={
+                    "TMPDIR": f"{SANDBOX_ROOT}/tmp",
+                    "NODE_PATH": "/usr/local/lib/node_modules",
+                },
             )
 
-            # Build output from result
+            # Build output from stdout and stderr
             output_parts = []
             if result.stdout:
                 output_parts.append(result.stdout)
@@ -485,9 +482,13 @@ def _build_sandbox_mcp_server(sandbox):
 
             output = "\n".join(output_parts) if output_parts else "(no output)"
 
-            # Include exit code if non-zero
-            if result.exit_code != 0:
+            # Include exit code if non-zero and no stderr
+            if result.exit_code != 0 and not result.stderr:
                 output = f"Exit code: {result.exit_code}\n{output}"
+
+            # Include error if present
+            if result.error:
+                output = f"Error: {result.error}\n{output}"
 
             return {"content": [{"type": "text", "text": output}]}
         except Exception as exc:
@@ -533,12 +534,10 @@ async def agent_event_generator(
             skill_prompt += f"\n\n# Skill: {skill_name}\n" + skill_md_path.read_text()
 
     # Build system prompt with E2B paths
+    # Only need to replace the scripts path since skills path is already correct
     system_prompt = skill_prompt.replace(
         "/scripts/create_docx.py",
         f"{SANDBOX_ROOT}/scripts/create_docx.py"
-    ).replace(
-        "/skills",
-        f"{SANDBOX_ROOT}/skills"
     )
 
     sandbox_server = _build_sandbox_mcp_server(sandbox) if sandbox else None
