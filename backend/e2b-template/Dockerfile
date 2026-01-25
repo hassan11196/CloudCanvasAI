@@ -2,7 +2,8 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TMPDIR=/home/user/tmp
+    TMPDIR=/home/user/tmp \
+    NODE_PATH=/usr/lib/node_modules:/usr/local/lib/node_modules
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \

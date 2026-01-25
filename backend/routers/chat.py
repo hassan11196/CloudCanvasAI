@@ -388,12 +388,19 @@ def _build_sandbox_mcp_server(sandbox):
                 f"cmd = {json.dumps(command)}\n"
                 "env = os.environ.copy()\n"
                 f"env['TMPDIR'] = {json.dumps(sandbox_tmp)}\n"
+                # Set NODE_PATH for globally installed npm packages
+                "node_paths = ['/usr/lib/node_modules', '/usr/local/lib/node_modules']\n"
+                "existing_node_path = env.get('NODE_PATH', '')\n"
+                "env['NODE_PATH'] = ':'.join([p for p in node_paths + [existing_node_path] if p])\n"
                 f"cwd = {json.dumps(SANDBOX_ROOT)}\n"
                 "shell = '/bin/bash' if os.path.exists('/bin/bash') else '/bin/sh'\n"
-                "result = subprocess.run([shell, '-lc', cmd], capture_output=True, text=True, env=env, cwd=cwd)\n"
-                "print(f'Exit code: {result.returncode}')\n"
-                "print(result.stdout, end='')\n"
-                "print(result.stderr, end='')\n"
+                "try:\n"
+                "    result = subprocess.run([shell, '-lc', cmd], capture_output=True, text=True, env=env, cwd=cwd, timeout=120)\n"
+                "    print(f'Exit code: {result.returncode}')\n"
+                "    print(result.stdout, end='')\n"
+                "    print(result.stderr, end='')\n"
+                "except subprocess.TimeoutExpired:\n"
+                "    print('Error: Command timed out after 120 seconds')\n"
             )
             execution = sandbox.run_code(python_code)
             output = ""

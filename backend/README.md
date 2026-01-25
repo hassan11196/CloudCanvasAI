@@ -1,6 +1,6 @@
-# Zephior Backend
+# Zephior Canvas Backend
 
-FastAPI backend for Zephior.
+FastAPI backend for Zephior Canvas.
 
 ## Setup
 
