@@ -384,7 +384,7 @@ function Chat() {
     return (
       <div className="auth-screen">
         <div className="auth-card">
-          <div className="auth-title">Sign in to Zephior</div>
+          <div className="auth-title">Sign in to Zephior Canvas</div>
           <p className="auth-subtitle">Use Google or email to continue</p>
           <button className="auth-google" onClick={handleGoogleLogin}>
             Continue with Google
@@ -550,7 +550,7 @@ function Chat() {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Message Zephior..."
+                placeholder="Message Zephior Canvas..."
                 disabled={isLoading}
               />
               <button type="submit" className="send-btn" disabled={isLoading || !input.trim()}>
