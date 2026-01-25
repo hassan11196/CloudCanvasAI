@@ -12,6 +12,8 @@ function DocumentPreview({ sessionId, filePath, onClose }) {
   useEffect(() => {
     if (!sessionId || !filePath) {
       setContent(null);
+      setError(null);
+      setLoading(false);
       return;
     }
 
@@ -30,13 +32,20 @@ function DocumentPreview({ sessionId, filePath, onClose }) {
       const response = await fetch(url, { headers: authHeader });
 
       if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error('Document is not available yet. Waiting for generation...');
+        }
         throw new Error(`Failed to load file: ${response.statusText}`);
       }
 
       if (ext === 'docx') {
         const arrayBuffer = await response.arrayBuffer();
-        const result = await mammoth.convertToHtml({ arrayBuffer });
-        setContent({ type: 'html', data: result.value });
+        try {
+          const result = await mammoth.convertToHtml({ arrayBuffer });
+          setContent({ type: 'html', data: result.value });
+        } catch (conversionError) {
+          throw new Error('Unable to preview DOCX. The file might still be generating or is not a valid document.');
+        }
       } else if (['txt', 'md', 'json', 'py', 'js', 'jsx', 'ts', 'tsx', 'css', 'html'].includes(ext)) {
         const text = await response.text();
         setContent({ type: 'text', data: text });
@@ -99,7 +108,12 @@ function DocumentPreview({ sessionId, filePath, onClose }) {
           <div className="error-state">
             <span className="error-icon">⚠️</span>
             <p>{error}</p>
-            <button onClick={() => loadDocument(fileType)}>Retry</button>
+            <div className="error-actions">
+              <button onClick={() => loadDocument(fileType)}>Retry</button>
+              {filePath && (
+                <button onClick={handleDownload}>Download</button>
+              )}
+            </div>
           </div>
         )}
 
