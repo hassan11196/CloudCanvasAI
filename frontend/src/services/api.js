@@ -1,4 +1,6 @@
-const API_BASE_URL = 'http://localhost:8000';
+
+//  Get API_BASE_URL from environment variable
+const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000';
 
 export const apiService = {
   async streamChatMessage(message, sessionId, onEvent, onComplete, onError) {
@@ -26,12 +28,23 @@ export const apiService = {
               onEvent(data);
               if (data.type === 'text_delta') content += data.content;
               if (data.type === 'complete') onComplete(content || data.content);
-            } catch {}
+            } catch {
+              // Ignore JSON parse errors
+              console.warn('Failed to parse stream line:', line);
+            }
           }
         }
       }
     } catch (error) {
       onError(error);
     }
+  },
+
+  async deleteSession(sessionId) {
+    const response = await fetch(`${API_BASE_URL}/chat/${sessionId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
   },
 };
