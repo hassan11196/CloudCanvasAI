@@ -199,6 +199,7 @@ class SandboxManager:
             self._copy_directory_to_sandbox(sandbox, self.skills_dir, "/etc/claude-code/.claude/skills")
             # Also copy to the user skills directory as a fallback
             self._copy_directory_to_sandbox(sandbox, self.skills_dir, "/root/.claude/skills")
+            self._copy_directory_to_sandbox(sandbox, self.skills_dir, f"{SANDBOX_ROOT}/skills")
             logger.info("Sandbox initialization complete")
     
     def _copy_directory_to_sandbox(self, sandbox: Sandbox, local_dir: Path, remote_path: str):

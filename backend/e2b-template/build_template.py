@@ -2,16 +2,62 @@
 """Build E2B template for Zephior docs.
 
 Usage:
-    # Using E2B CLI (recommended):
-    cd e2b-template && e2b template build --name zephior-docs
-
-    # Or using this script:
     python build_template.py --name zephior-docs
 """
 import argparse
-import subprocess
+import inspect
 import sys
 from pathlib import Path
+
+
+def _find_builder():
+    try:
+        from e2b import Template  # type: ignore
+    except Exception:
+        Template = None
+
+    if Template and hasattr(Template, "build"):
+        return Template.build
+
+    try:
+        import e2b  # type: ignore
+    except Exception:
+        return None
+
+    if hasattr(e2b, "Template") and hasattr(e2b.Template, "build"):
+        return e2b.Template.build
+
+    for module_name in ("template", "templates"):
+        module = getattr(e2b, module_name, None)
+        if module and hasattr(module, "build"):
+            return module.build
+
+    if hasattr(e2b, "build_template"):
+        return e2b.build_template
+
+    return None
+
+
+def _build_kwargs(builder, name: str, template_dir: Path, skip_cache: bool) -> dict:
+    sig = inspect.signature(builder)
+    kwargs = {}
+
+    if "name" in sig.parameters:
+        kwargs["name"] = name
+    elif "alias" in sig.parameters:
+        kwargs["alias"] = name
+
+    if "path" in sig.parameters:
+        kwargs["path"] = str(template_dir)
+    elif "template_dir" in sig.parameters:
+        kwargs["template_dir"] = str(template_dir)
+
+    if "skip_cache" in sig.parameters:
+        kwargs["skip_cache"] = skip_cache
+    elif "no_cache" in sig.parameters:
+        kwargs["no_cache"] = skip_cache
+
+    return kwargs
 
 
 def main() -> None:
@@ -26,20 +72,24 @@ def main() -> None:
 
     template_dir = Path(__file__).parent
 
-    # Use E2B CLI for building templates
-    cmd = ["e2b", "template", "build", "--name", args.name, "--path", str(template_dir)]
+    builder = _find_builder()
+    if not builder:
+        print(
+            "Error: E2B Python SDK not found or missing template builder. "
+            "Install it with: pip install e2b",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     print(f"Building template '{args.name}' from {template_dir}")
-    print(f"Running: {' '.join(cmd)}")
+    print("Running: E2B Python SDK template build")
 
     try:
-        result = subprocess.run(cmd, check=True, cwd=template_dir)
+        kwargs = _build_kwargs(builder, args.name, template_dir, args.skip_cache)
+        builder(**kwargs)
         print(f"Template '{args.name}' built successfully!")
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         print(f"Error building template: {e}", file=sys.stderr)
-        sys.exit(1)
-    except FileNotFoundError:
-        print("Error: E2B CLI not found. Install it with: npm install -g @e2b/cli", file=sys.stderr)
         sys.exit(1)
 
 

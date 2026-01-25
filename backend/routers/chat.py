@@ -53,9 +53,9 @@ You are Zephior, an AI assistant with document creation capabilities.
 """
 SKILL_NAMES = ("docx", "pdf", "pptx", "xlsx")
 SKILL_PATH_NOTE = (
-    "Skill assets are available under /etc/claude-code/.claude/skills/{docx,pdf,pptx,xlsx}. "
+    "Skill assets are available under /home/user/skills/{docx,pdf,pptx,xlsx}. "
     "When instructions reference relative paths like ooxml/scripts or scripts/thumbnail.py, "
-    "run them from the appropriate skill directory or use absolute paths under /etc/claude-code/.claude/skills. "
+    "run them from the appropriate skill directory or use absolute paths under /home/user/skills. "
     "Use /home/user/workspace for working files and /home/user/tmp for temporary files. "
     "If Node.js or docx-js dependencies are unavailable, prefer /home/user/scripts/create_docx.py "
     "to generate .docx files."
