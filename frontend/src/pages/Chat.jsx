@@ -64,33 +64,45 @@ const cleanAssistantContent = (content = '') => {
     .trim();
 };
 
-// Get a clean description for tool actions
+// Normalize and label tool actions for display
 const getToolDescription = (tool) => {
-  const { name, input } = tool;
+  const { name: rawName = '', input } = tool;
+  const name = rawName.replace(/^mcp__(sandbox|remote)?__/, '') || rawName;
+  const lowerName = name.toLowerCase();
+  const isSandbox = rawName.includes('__sandbox__');
   const filePath = input?.file_path || input?.path || input?.pattern || input?.TargetFile || '';
   const fileName = filePath.split('/').pop() || '';
 
-  switch (name) {
-    case 'Write':
-    case 'write_to_file':
-      return { action: 'Creating', fileName, icon: '📝' };
-    case 'Edit':
-    case 'replace_file_content':
-    case 'multi_replace_file_content':
-      return { action: 'Editing', fileName, icon: '✏️' };
-    case 'Read':
-      return { action: 'Reading', fileName, icon: '📄' };
-    case 'Bash':
-    case 'run_command':
-      const cmd = (input?.command || input?.CommandLine || 'command').split(' ')[0];
-      return { action: 'Running', fileName: cmd, icon: '⚡' };
-    case 'Glob':
-      return { action: 'Searching', fileName: input?.pattern || 'files', icon: '🔍' };
-    case 'Grep':
-      return { action: 'Searching for', fileName: input?.pattern || 'pattern', icon: '🔎' };
-    default:
-      return { action: 'Using', fileName: name, icon: '🔧' };
+  if (lowerName === 'write' || lowerName === 'write_to_file') {
+    const scope = isSandbox ? ' in sandbox' : '';
+    return { action: `Writing${scope}`, fileName, icon: '📝' };
   }
+
+  if (lowerName === 'edit' || lowerName === 'replace_file_content' || lowerName === 'multi_replace_file_content') {
+    const scope = isSandbox ? ' in sandbox' : '';
+    return { action: `Editing${scope}`, fileName, icon: '✏️' };
+  }
+
+  if (lowerName === 'read') {
+    const scope = isSandbox ? ' in sandbox' : '';
+    return { action: `Reading${scope}`, fileName, icon: '📄' };
+  }
+
+  if (lowerName === 'bash' || lowerName === 'run_command') {
+    const cmd = (input?.command || input?.CommandLine || 'command').split(' ')[0];
+    const scope = isSandbox ? ' on sandbox' : '';
+    return { action: `Running bash command${scope}`, fileName: cmd, icon: '⚡' };
+  }
+
+  if (lowerName === 'glob') {
+    return { action: 'Searching', fileName: input?.pattern || 'files', icon: '🔍' };
+  }
+
+  if (lowerName === 'grep') {
+    return { action: 'Searching for', fileName: input?.pattern || 'pattern', icon: '🔎' };
+  }
+
+  return { action: 'Using', fileName: name, icon: '🔧' };
 };
 
 // Collapsible tool step component
@@ -344,6 +356,9 @@ function Chat() {
               bumpPreviewRevision();
               setCreatingFile(docPath);
             }
+            // Kick the artifacts list to re-fetch when a document is requested,
+            // even if the backend hasn't emitted a file_change yet.
+            bumpArtifactRevision();
             if (docPath && isArtifactPath(docPath)) {
               setDocStatus({
                 state: 'creating',
