@@ -1,127 +1,194 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import mammoth from 'mammoth';
 import './DocumentPreview.css';
 import { API_BASE_URL, getAuthHeader } from '../services/api';
 
-function DocumentPreview({ sessionId, filePath, creatingFile, onClose, refreshTrigger }) {
+const TEXT_EXTENSIONS = ['txt', 'md', 'json', 'py', 'js', 'jsx', 'ts', 'tsx', 'css', 'html'];
+const BINARY_EXTENSIONS = new Set(['docx', 'pptx', 'xlsx', 'pdf']);
+const MIN_BINARY_SIZE = 120;
+const MAX_AUTO_RETRIES = 6;
+const BASE_RETRY_DELAY = 1200; // ms
+
+function DocumentPreview({ sessionId, filePath, creatingFile, refreshToken }) {
   const [content, setContent] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [fileType, setFileType] = useState(null);
-  const [retryCount, setRetryCount] = useState(0);
-  const maxRetries = 3;
-  const retryDelay = 1500; // ms
+  const [viewState, setViewState] = useState({ status: 'idle', message: '' });
+  const [attempt, setAttempt] = useState(0);
+  const retryTimeoutRef = useRef(null);
+  const controllerRef = useRef(null);
+  const pdfUrlRef = useRef(null);
+
+  const clearPending = useCallback(() => {
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+    if (controllerRef.current) {
+      controllerRef.current.abort();
+      controllerRef.current = null;
+    }
+  }, []);
+
+  const clearPdfUrl = useCallback(() => {
+    if (pdfUrlRef.current) {
+      URL.revokeObjectURL(pdfUrlRef.current);
+      pdfUrlRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearPending();
+      clearPdfUrl();
+    };
+  }, [clearPending, clearPdfUrl]);
+
+  const loadDocument = useCallback(
+    (attemptNumber = 0) => {
+      if (!sessionId || !filePath) return;
+
+      clearPending();
+      const controller = new AbortController();
+      controllerRef.current = controller;
+
+      const ext = filePath.split('.').pop()?.toLowerCase() || '';
+      const retryLater = (message) => {
+        if (attemptNumber >= MAX_AUTO_RETRIES) {
+          setViewState({
+            status: 'error',
+            message: message || 'Document is not available yet.',
+          });
+          return false;
+        }
+        const nextAttempt = attemptNumber + 1;
+        retryTimeoutRef.current = setTimeout(
+          () => loadDocument(nextAttempt),
+          Math.min(BASE_RETRY_DELAY * nextAttempt, 4000)
+        );
+        setAttempt(nextAttempt);
+        setViewState({
+          status: 'loading',
+          message: message || 'Waiting for updated file...',
+        });
+        return true;
+      };
+
+      setAttempt(attemptNumber);
+      if (attemptNumber === 0) {
+        setContent(null);
+      }
+      setViewState({
+        status: 'loading',
+        message:
+          creatingFile && creatingFile === filePath
+            ? 'Waiting for the agent to finish writing...'
+            : attemptNumber
+            ? 'Updating preview...'
+            : 'Loading document...',
+      });
+
+      (async () => {
+        try {
+          const authHeader = await getAuthHeader();
+          const response = await fetch(
+            `${API_BASE_URL}/files/${sessionId}/content/${encodeURIComponent(filePath)}?t=${Date.now()}`,
+            {
+              headers: authHeader,
+              cache: 'no-store',
+              signal: controller.signal,
+            }
+          );
+
+          if (!response.ok) {
+            if (response.status === 404) {
+              retryLater('Document is not ready yet. Checking again...');
+              return;
+            }
+            throw new Error(`Failed to load file (HTTP ${response.status})`);
+          }
+
+          if (ext === 'docx') {
+            const buffer = await response.arrayBuffer();
+            if (buffer.byteLength < MIN_BINARY_SIZE || BINARY_EXTENSIONS.has(ext) && buffer.byteLength === 0) {
+              retryLater('Waiting for document contents...');
+              return;
+            }
+            try {
+              const result = await mammoth.convertToHtml({ arrayBuffer: buffer });
+              setContent({ type: 'docx', data: result.value });
+            } catch (conversionError) {
+              retryLater('Document is still being finalized...');
+              return;
+            }
+          } else if (ext === 'pdf') {
+            const blob = await response.blob();
+            if (blob.size < MIN_BINARY_SIZE) {
+              retryLater('Waiting for document contents...');
+              return;
+            }
+            clearPdfUrl();
+            const url = URL.createObjectURL(blob);
+            pdfUrlRef.current = url;
+            setContent({ type: 'pdf', data: url });
+          } else if (TEXT_EXTENSIONS.includes(ext)) {
+            const text = await response.text();
+            setContent({ type: 'text', data: text });
+          } else {
+            setContent({ type: 'unsupported', data: ext });
+          }
+
+          setViewState({ status: 'ready', message: 'Live preview' });
+        } catch (err) {
+          if (controller.signal.aborted) return;
+          console.error('Document preview load error:', err);
+          const scheduled = retryLater(err.message || 'Retrying...');
+          if (!scheduled) {
+            setViewState({
+              status: 'error',
+              message: err.message || 'Unable to preview document.',
+            });
+          }
+        }
+      })();
+    },
+    [sessionId, filePath, creatingFile, clearPending, clearPdfUrl]
+  );
 
   useEffect(() => {
     if (!sessionId || !filePath) {
+      clearPending();
       setContent(null);
-      setError(null);
-      setLoading(false);
-      setRetryCount(0);
+      setViewState({ status: 'idle', message: '' });
+      setAttempt(0);
       return;
     }
-
-    const ext = filePath.split('.').pop()?.toLowerCase();
-    setFileType(ext);
-
-    // Add a small delay for newly created files to ensure they're fully written
-    const isNewFile = creatingFile === filePath;
-    const delay = isNewFile ? 500 : 0;
-
-    const timeoutId = setTimeout(() => {
-      loadDocument(ext);
-    }, delay);
-
-    return () => clearTimeout(timeoutId);
-  }, [sessionId, filePath, refreshTrigger]);
-
-  const loadDocument = async (ext, currentRetry = 0) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const url = `${API_BASE_URL}/files/${sessionId}/content/${filePath}`;
-      const authHeader = await getAuthHeader();
-      const response = await fetch(url, { headers: authHeader });
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          // File not found - might still be generating, retry if we haven't exceeded limit
-          if (currentRetry < maxRetries) {
-            setRetryCount(currentRetry + 1);
-            setTimeout(() => loadDocument(ext, currentRetry + 1), retryDelay);
-            return;
-          }
-          throw new Error('Document is not available yet. The file may still be generating.');
-        }
-        throw new Error(`Failed to load file: ${response.statusText}`);
-      }
-
-      if (ext === 'docx') {
-        const arrayBuffer = await response.arrayBuffer();
-
-        // Check if file is too small (likely still being written or corrupt)
-        if (arrayBuffer.byteLength < 100) {
-          if (currentRetry < maxRetries) {
-            setRetryCount(currentRetry + 1);
-            setTimeout(() => loadDocument(ext, currentRetry + 1), retryDelay);
-            return;
-          }
-          throw new Error('Document appears to be empty or still generating.');
-        }
-
-        try {
-          const result = await mammoth.convertToHtml({ arrayBuffer });
-          setContent({ type: 'html', data: result.value });
-          setRetryCount(0);
-        } catch (conversionError) {
-          // Mammoth failed - file might not be fully written yet, retry
-          if (currentRetry < maxRetries) {
-            console.log(`DOCX conversion failed, retrying (${currentRetry + 1}/${maxRetries})...`);
-            setRetryCount(currentRetry + 1);
-            setTimeout(() => loadDocument(ext, currentRetry + 1), retryDelay);
-            return;
-          }
-          throw new Error('Unable to preview DOCX. The file might still be generating or is not a valid document.');
-        }
-      } else if (['txt', 'md', 'json', 'py', 'js', 'jsx', 'ts', 'tsx', 'css', 'html'].includes(ext)) {
-        const text = await response.text();
-        setContent({ type: 'text', data: text });
-        setRetryCount(0);
-      } else if (ext === 'pdf') {
-        const blob = await response.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        setContent({ type: 'pdf', data: objectUrl });
-        setRetryCount(0);
-      } else {
-        setContent({ type: 'unsupported', data: ext });
-        setRetryCount(0);
-      }
-    } catch (err) {
-      setError(err.message);
-      setRetryCount(0);
-    } finally {
-      setLoading(false);
-    }
-  };
+    loadDocument(0);
+  }, [sessionId, filePath, refreshToken, loadDocument, clearPending]);
 
   const handleDownload = async () => {
-    const url = `${API_BASE_URL}/files/${sessionId}/content/${filePath}`;
-    const authHeader = await getAuthHeader();
-    const response = await fetch(url, { headers: authHeader });
-    if (!response.ok) {
-      setError(`Failed to download file: ${response.statusText}`);
-      return;
+    try {
+      const authHeader = await getAuthHeader();
+      const response = await fetch(
+        `${API_BASE_URL}/files/${sessionId}/content/${encodeURIComponent(filePath)}?t=${Date.now()}`,
+        {
+          headers: authHeader,
+          cache: 'no-store',
+        }
+      );
+      if (!response.ok) {
+        throw new Error(`Failed to download file (HTTP ${response.status})`);
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filePath.split('/').pop();
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setViewState({ status: 'error', message: err.message });
     }
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = objectUrl;
-    link.download = filePath.split('/').pop();
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(objectUrl);
   };
 
   if (!sessionId || !filePath) {
@@ -136,44 +203,33 @@ function DocumentPreview({ sessionId, filePath, creatingFile, onClose, refreshTr
     );
   }
 
-  const isCreating = creatingFile && creatingFile === filePath;
+  const isLoading = viewState.status === 'loading';
+  const isError = viewState.status === 'error';
 
   return (
     <div className="document-preview">
-      {isCreating && !content && !loading && !error && (
-        <div className="creation-banner">
-          <span className="creation-dot" />
-          <span>Artifact is being created...</span>
-        </div>
-      )}
       <div className="preview-content">
-        {loading && (
+        {isLoading && (
           <div className="loading-state">
             <div className="spinner"></div>
-            <p>
-              {retryCount > 0
-                ? `Loading document (attempt ${retryCount + 1}/${maxRetries + 1})...`
-                : 'Loading document...'}
-            </p>
+            <p>{viewState.message || 'Loading document...'}</p>
           </div>
         )}
 
-        {error && (
+        {isError && (
           <div className="error-state">
             <span className="error-icon">⚠️</span>
-            <p>{error}</p>
+            <p>{viewState.message || 'Unable to preview document.'}</p>
             <div className="error-actions">
-              <button onClick={() => loadDocument(fileType, 0)}>Retry</button>
-              {filePath && (
-                <button onClick={handleDownload}>Download</button>
-              )}
+              <button onClick={() => loadDocument(0)}>Retry now</button>
+              {filePath && <button onClick={handleDownload}>Download</button>}
             </div>
           </div>
         )}
 
-        {!loading && !error && content && (
+        {!isLoading && !isError && content && (
           <>
-            {content.type === 'html' && (
+            {content.type === 'docx' && (
               <div
                 className="docx-content"
                 dangerouslySetInnerHTML={{ __html: content.data }}

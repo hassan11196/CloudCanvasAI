@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { apiService } from '../services/api';
+import { apiService, API_BASE_URL, getAuthHeader } from '../services/api';
 import DocumentPreview from '../components/DocumentPreview';
 import FileList from '../components/FileList';
 import {
@@ -193,7 +193,8 @@ function Chat() {
   // Document preview state
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
+  const [previewRevision, setPreviewRevision] = useState(0);
+  const [artifactRevision, setArtifactRevision] = useState(0);
   const [creatingFile, setCreatingFile] = useState(null);
 
   // Sidebar state
@@ -224,6 +225,20 @@ function Chat() {
   useEffect(() => { toolsRef.current = toolActivity; }, [toolActivity]);
   useEffect(() => { thinkingRef.current = thinkingSteps; }, [thinkingSteps]);
 
+  const bumpPreviewRevision = () => {
+    setPreviewRevision((prev) => prev + 1);
+  };
+  const bumpArtifactRevision = () => {
+    setArtifactRevision((prev) => prev + 1);
+  };
+
+  // Auto-open preview when a file is selected
+  useEffect(() => {
+    if (selectedFile && !previewOpen) {
+      setPreviewOpen(true);
+    }
+  }, [selectedFile, previewOpen]);
+
   const updateActiveChat = (updates) => {
     setChats((prev) => prev.map((c) => (c.id === activeChatId ? { ...c, ...updates } : c)));
   };
@@ -237,6 +252,7 @@ function Chat() {
     setStreamingContent('');
     setSelectedFile(null);
     setPreviewOpen(false);
+    setArtifactRevision(0);
   };
 
   const handleSwitchChat = (chatId) => {
@@ -246,6 +262,7 @@ function Chat() {
     setThinkingSteps([]);
     setStreamingContent('');
     setSelectedFile(null);
+    setArtifactRevision(0);
   };
 
   const handleDeleteChat = async (chatId) => {
@@ -277,7 +294,8 @@ function Chat() {
     if (!isArtifactPath(event.path)) return;
     setSelectedFile(event.path);
     setPreviewOpen(true);
-    setFileRefreshTrigger(prev => prev + 1);
+    bumpPreviewRevision();
+    bumpArtifactRevision();
     if (creatingFile === event.path) {
       setCreatingFile(null);
     }
@@ -322,7 +340,7 @@ function Chat() {
             const docPath = event.path || '';
             if (docPath && isArtifactPath(docPath)) {
               setSelectedFile(docPath);
-              setFileRefreshTrigger((prev) => prev + 1);
+              bumpPreviewRevision();
               setCreatingFile(docPath);
             }
             if (docPath && isArtifactPath(docPath)) {
@@ -331,8 +349,12 @@ function Chat() {
                 file: docPath,
                 message: docPath ? `Creating "${docPath}"` : 'Generating artifact',
               });
-              setPreviewOpen(true);
               setStatusMessage(docPath ? `Creating ${docPath}...` : 'Artifact generation requested');
+              setPreviewOpen(true);
+            }
+            // Even if path is missing, surface the preview so user sees artifacts list populate
+            if (!previewOpen) {
+              setPreviewOpen(true);
             }
           } else if (event.content === 'doc_generation_failed') {
             const docPath = event.path || selectedFile || '';
@@ -363,6 +385,13 @@ function Chat() {
             if (updated.length > 0) updated[updated.length - 1].result = event.result;
             return updated;
           });
+          // Nudge preview to pull the latest version after a tool finishes
+          if (selectedFile || creatingFile) {
+            bumpPreviewRevision();
+          }
+          if (selectedFile || creatingFile) {
+            bumpArtifactRevision();
+          }
         } else if (event.type === 'text_delta') {
           // Filter out raw status lines that shouldn't show as user-facing text
           const trimmed = (event.content || '').trim().toLowerCase();
@@ -397,6 +426,11 @@ function Chat() {
         setUsageSummary(null);
         setStreamingContent('');
         setCreatingFile(null);
+        // Ensure preview reflects final state after chat completes
+        if (selectedFile || creatingFile) {
+          bumpPreviewRevision();
+          bumpArtifactRevision();
+        }
       },
       (error) => {
         setChats((prev) => prev.map((c) =>
@@ -411,6 +445,10 @@ function Chat() {
         setUsageSummary(null);
         setStreamingContent('');
         setCreatingFile(null);
+        if (selectedFile || creatingFile) {
+          bumpPreviewRevision();
+          bumpArtifactRevision();
+        }
       }
     );
   };
@@ -446,6 +484,31 @@ function Chat() {
 
   const handleSignOut = async () => {
     await signOut(auth);
+  };
+
+  const handleDownloadSelected = async () => {
+    if (!activeChat.sessionId || !selectedFile) return;
+    try {
+      const authHeader = await getAuthHeader();
+      const response = await fetch(
+        `${API_BASE_URL}/files/${activeChat.sessionId}/content/${encodeURIComponent(selectedFile)}?t=${Date.now()}`,
+        { headers: authHeader, cache: 'no-store' }
+      );
+      if (!response.ok) {
+        throw new Error(`Failed to download file (HTTP ${response.status})`);
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = selectedFile.split('/').pop();
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      console.error('Download failed:', err);
+    }
   };
 
   if (!currentUser) {
@@ -654,16 +717,24 @@ function Chat() {
 
       {/* Preview Panel */}
       {previewOpen && (
-          <div className="preview-panel">
-            <div className="preview-panel-header">
-              <span className="preview-title">
-                {selectedFile ? selectedFile.split('/').pop() : 'Artifacts'}
-              </span>
-              <div className="preview-actions">
-                <button onClick={() => setFileRefreshTrigger(prev => prev + 1)} title="Refresh">
-                  ↻
+        <div className="preview-panel">
+          <div className="preview-panel-header">
+            <div className="preview-title">
+              <div className="preview-label">Document Preview</div>
+              <div className="preview-filename">
+                {selectedFile ? selectedFile.split('/').pop() : 'Waiting for a document'}
+              </div>
+            </div>
+            <div className="preview-actions">
+              {selectedFile && (
+                <button onClick={handleDownloadSelected} title="Download file">
+                  ⬇
                 </button>
-              <button onClick={() => setPreviewOpen(false)} title="Close">
+              )}
+              <button onClick={bumpPreviewRevision} title="Refresh preview">
+                ↻
+              </button>
+              <button onClick={() => setPreviewOpen(false)} title="Close preview">
                 ×
               </button>
             </div>
@@ -672,14 +743,23 @@ function Chat() {
             sessionId={activeChat.sessionId}
             onFileSelect={setSelectedFile}
             selectedFile={selectedFile}
-            refreshTrigger={fileRefreshTrigger}
+            refreshToken={artifactRevision}
+            onListUpdate={(files) => {
+              if (!files || files.length === 0) return;
+              const hasSelected = files.some((f) => f.path === selectedFile);
+              if (!hasSelected) {
+                setSelectedFile(files[0].path);
+              }
+              if (!previewOpen) {
+                setPreviewOpen(true);
+              }
+            }}
           />
           <DocumentPreview
             sessionId={activeChat.sessionId}
             filePath={selectedFile}
             creatingFile={creatingFile}
-            onClose={() => setPreviewOpen(false)}
-            refreshTrigger={fileRefreshTrigger}
+            refreshToken={previewRevision}
           />
         </div>
       )}

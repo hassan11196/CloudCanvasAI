@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import './FileList.css';
 import { API_BASE_URL, getAuthHeader } from '../services/api';
 
@@ -24,10 +24,47 @@ const FILE_ICONS = {
   default: '📄'
 };
 
-function FileList({ sessionId, onFileSelect, selectedFile, refreshTrigger }) {
+function FileList({ sessionId, onFileSelect, selectedFile, refreshToken, onListUpdate }) {
   const [artifacts, setArtifacts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const inFlightRef = useRef(false);
+
+  const loadArtifacts = useCallback(async (silent = false) => {
+    if (!sessionId) {
+      setArtifacts([]);
+      return;
+    }
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
+
+    try {
+      const authHeader = await getAuthHeader();
+      const response = await fetch(`${API_BASE_URL}/files/${sessionId}/artifacts`, {
+        headers: authHeader,
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        throw new Error('Failed to load artifacts');
+      }
+      const data = await response.json();
+      setArtifacts(data);
+      if (onListUpdate) {
+        onListUpdate(data);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      inFlightRef.current = false;
+      if (!silent) {
+        setLoading(false);
+      }
+    }
+  }, [sessionId, onListUpdate]);
 
   useEffect(() => {
     if (sessionId) {
@@ -35,7 +72,7 @@ function FileList({ sessionId, onFileSelect, selectedFile, refreshTrigger }) {
     } else {
       setArtifacts([]);
     }
-  }, [sessionId, refreshTrigger]);
+  }, [sessionId, refreshToken, loadArtifacts]);
 
   // Auto-select an artifact when none (or a stale one) is selected
   useEffect(() => {
@@ -47,27 +84,6 @@ function FileList({ sessionId, onFileSelect, selectedFile, refreshTrigger }) {
       onFileSelect(docFiles[0].path);
     }
   }, [artifacts, selectedFile, onFileSelect]);
-
-  const loadArtifacts = async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const authHeader = await getAuthHeader();
-      const response = await fetch(`${API_BASE_URL}/files/${sessionId}/artifacts`, {
-        headers: authHeader,
-      });
-      if (!response.ok) {
-        throw new Error('Failed to load artifacts');
-      }
-      const data = await response.json();
-      setArtifacts(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const getFileIcon = (file) => {
     if (file.is_dir) return FILE_ICONS.folder;
@@ -98,9 +114,6 @@ function FileList({ sessionId, onFileSelect, selectedFile, refreshTrigger }) {
     <div className="file-list">
       <div className="file-list-header">
         <span>Artifacts</span>
-        <button className="refresh-btn" onClick={loadArtifacts} title="Refresh">
-          🔄
-        </button>
       </div>
 
       {loading && (
