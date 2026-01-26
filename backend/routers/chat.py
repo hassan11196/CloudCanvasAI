@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import uuid
 from fnmatch import fnmatch
@@ -7,6 +8,7 @@ from typing import Optional, Any
 import re
 import traceback
 import logging
+import shutil
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends
@@ -46,6 +48,44 @@ DOCUMENT_EXTENSIONS = {".docx", ".pptx", ".xlsx", ".pdf", ".md", ".txt", ".html"
 # Path to the docx creation script
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 SKILLS_DIR = Path(__file__).parent.parent / "skills"
+
+
+def _ensure_host_skills_available() -> None:
+    """
+    Make sure the host agent (outside the E2B sandbox) has access to the bundled skills.
+    If /etc/claude-code/.claude/skills is missing, seed it from the repo copy; also set env fallbacks.
+    """
+    managed_dir = Path("/etc/claude-code/.claude/skills")
+    user_dir = Path.home() / ".claude/skills"
+    project_skills = SKILLS_DIR
+
+    # Skip if we don't have bundled skills to copy
+    if not project_skills.exists():
+        logger.warning("Project skills directory not found at %s", project_skills)
+        return
+
+    for target in (managed_dir, user_dir):
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            # Copy per-skill folder only if it is missing to avoid clobbering updates
+            for skill in project_skills.iterdir():
+                dest = target / skill.name
+                if dest.exists():
+                    continue
+                if skill.is_dir():
+                    shutil.copytree(skill, dest)
+                else:
+                    shutil.copy2(skill, dest)
+        except Exception as exc:
+            logger.warning("Unable to prepare skills in %s: %s", target, exc)
+
+    # Ensure the agent looks at the bundled skills even if managed dir prep fails
+    os.environ.setdefault("CLAUDE_PROJECT_DIR", str(Path(__file__).parent.parent))
+    os.environ.setdefault("CLAUDE_SKILLS_DIRS", str(project_skills))
+
+
+# Prepare host skills on import so server-side agent startups don't fail on missing paths
+_ensure_host_skills_available()
 
 # System prompt for document creation capabilities
 DOCUMENT_SYSTEM_PROMPT = """

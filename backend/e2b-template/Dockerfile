@@ -5,6 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TMPDIR=/home/user/tmp \
     NODE_PATH=/usr/lib/node_modules:/usr/local/lib/node_modules
 
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     libreoffice \
@@ -31,6 +32,22 @@ RUN npm install -g \
     pptxgenjs \
     && npm cache clean --force
 
-RUN mkdir -p /home/user/tmp /home/user/workspace
-RUN mkdir -p /home/user/workspace/skills
+# Create user and set up directories; tolerate rebuilds where user already exists
+RUN if id -u user >/dev/null 2>&1; then \
+        echo "user already exists"; \
+    else \
+        useradd -m -s /bin/bash user; \
+    fi && \
+    mkdir -p /home/user/tmp /home/user/workspace /home/user/workspace/skills /home/user/.claude /etc/claude-code/.claude && \
+    chown -R user:user /home/user /etc/claude-code/.claude
+
 COPY skills/ /home/user/workspace/skills/
+RUN chown -R user:user /home/user/workspace/skills
+
+USER user
+WORKDIR /home/user/workspace
+ENV CLAUDE_PROJECT_DIR=/home/user/workspace
+ENV CLAUDE_SKILLS_DIRS=/home/user/workspace/skills
+COPY --chown=user:user claude_config.json /etc/claude-code/.claude/claude_config.json
+RUN mkdir -p /etc/claude-code/.claude/skills
+COPY --chown=user:user skills/ /etc/claude-code/.claude/skills  

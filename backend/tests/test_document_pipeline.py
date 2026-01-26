@@ -10,12 +10,14 @@ Tests:
 
 import json
 import os
+import socket
 import sys
 import tempfile
 import time
 import uuid
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -26,11 +28,73 @@ from sandbox_manager import SandboxManager, SANDBOX_ROOT, SANDBOX_WORKSPACE
 from session_files import session_storage_path, session_workspace_dir
 
 
-# Skip all tests if E2B_API_KEY is not set
-pytestmark = pytest.mark.skipif(
-    not os.getenv("E2B_API_KEY"),
-    reason="E2B_API_KEY environment variable not set"
-)
+def _e2b_host() -> str:
+    """Resolve the E2B API host from env (supports overrides)."""
+    base_url = os.getenv("E2B_API_URL")
+    if not base_url:
+        domain = os.getenv("E2B_DOMAIN", "e2b.app")
+        base_url = f"https://api.{domain}"
+
+    parsed = urlparse(base_url)
+    return parsed.hostname or base_url
+
+
+def _can_reach_e2b_api() -> bool:
+    """Detect whether the E2B API is reachable (DNS + TCP)."""
+    host = _e2b_host()
+    if not host:
+        return False
+
+    try:
+        # Quick DNS resolution
+        socket.getaddrinfo(host, 443)
+        # Quick TCP connectivity check
+        with socket.create_connection((host, 443), timeout=3):
+            return True
+    except Exception:
+        return False
+
+
+# Skip when E2B key missing or the API host is unreachable
+pytestmark = [
+    pytest.mark.skipif(
+        not os.getenv("E2B_API_KEY"),
+        reason="E2B_API_KEY environment variable not set",
+    ),
+    pytest.mark.skipif(
+        not _can_reach_e2b_api(),
+        reason="E2B API unreachable (DNS or TCP 443 blocked)",
+    ),
+]
+
+
+def _ensure_html2pptx_script(sandbox) -> str:
+    """Ensure the html2pptx script exists in the sandbox."""
+    remote_path = f"{SANDBOX_ROOT}/scripts/html2pptx.js"
+    candidate_paths = [
+        # Preferred path (requested skill location)
+        Path(__file__).resolve().parents[2] / "skills" / "skills" / "pptx" / "scripts" / "html2pptx.js",
+        # Fallback copy under zephior-back
+        Path(__file__).parent.parent / "skills" / "pptx" / "scripts" / "html2pptx.js",
+    ]
+
+    local_path = next((p for p in candidate_paths if p.exists()), None)
+    if local_path is None:
+        raise FileNotFoundError("Local html2pptx.js not found in expected skill paths")
+
+    try:
+        sandbox.files.make_dir(f"{SANDBOX_ROOT}/scripts")
+    except Exception:
+        pass  # Directory may already exist
+
+    sandbox.files.write(remote_path, local_path.read_text())
+
+    try:
+        sandbox.files.read(remote_path)
+    except Exception as e:
+        raise RuntimeError(f"html2pptx.js not available in sandbox: {e}")
+
+    return remote_path
 
 
 class TestSandboxCreation:
@@ -400,6 +464,179 @@ class TestDocxRenderability:
         assert expected_title in full_text, f"Title '{expected_title}' not found in document"
         assert "Section 1" in full_text, "Section 1 heading not found"
         assert "First section content" in full_text, "Section 1 content not found"
+
+
+class TestPptxGeneration:
+    """PPTX pipeline: ensure presentations can be generated and parsed."""
+
+    @pytest.fixture
+    def created_pptx_content(self):
+        """Create a PPTX file in the sandbox and return its content."""
+        manager = SandboxManager()
+        test_user_id = f"test-user-{uuid.uuid4()}"
+        session_id = str(uuid.uuid4())
+
+        sandbox = manager.create_sandbox(test_user_id)
+        session_dir = session_workspace_dir(session_id)
+
+        try:
+            sandbox.files.make_dir(session_dir)
+        except Exception:
+            pass
+
+        script_path = _ensure_html2pptx_script(sandbox)
+
+        dep_check = sandbox.commands.run(
+            'node -e "require(\'pptxgenjs\'); require(\'playwright\'); require(\'sharp\');"',
+            timeout=60,
+            cwd=SANDBOX_ROOT,
+        )
+        if dep_check.exit_code != 0:
+            manager.close_sandbox(test_user_id)
+            pytest.skip(f"Missing Node dependencies for html2pptx: {dep_check.stderr or dep_check.stdout}")
+
+        slide1 = """<!doctype html>
+<html>
+<head>
+  <style>
+    body {
+      width: 720pt;
+      height: 405pt;
+      margin: 0;
+      padding: 32pt;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 16pt;
+      font-family: Arial, sans-serif;
+      background: #f8fafc;
+    }
+    h1 { margin: 0; font-size: 32pt; }
+    p { margin: 0; font-size: 18pt; }
+  </style>
+</head>
+<body>
+  <h1>Welcome</h1>
+  <p>This deck validates PPTX creation via html2pptx.</p>
+</body>
+</html>
+"""
+        slide2 = """<!doctype html>
+<html>
+<head>
+  <style>
+    body {
+      width: 720pt;
+      height: 405pt;
+      margin: 0;
+      padding: 32pt;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: 12pt;
+      font-family: Arial, sans-serif;
+      background: #eef2ff;
+    }
+    h2 { margin: 0; font-size: 28pt; }
+    ul { margin: 0; padding-left: 28pt; font-size: 18pt; }
+  </style>
+</head>
+<body>
+  <h2>Agenda</h2>
+  <ul>
+    <li>Create file</li>
+    <li>Read bytes</li>
+    <li>Parse slides</li>
+  </ul>
+</body>
+</html>
+"""
+
+        sandbox.files.write(f"{session_dir}/slide1.html", slide1)
+        sandbox.files.write(f"{session_dir}/slide2.html", slide2)
+        output_path = f"{session_dir}/pipeline.pptx"
+
+        node_script = f"""
+const path = require('path');
+const pptxgen = require('pptxgenjs');
+const html2pptx = require('{script_path}');
+
+(async () => {{
+  const pres = new pptxgen();
+  pres.layout = 'LAYOUT_16x9';
+  await html2pptx('slide1.html', pres, {{ tmpDir: '{SANDBOX_ROOT}/tmp' }});
+  await html2pptx('slide2.html', pres, {{ tmpDir: '{SANDBOX_ROOT}/tmp' }});
+  const outputPath = path.join(process.cwd(), 'pipeline.pptx');
+  await pres.writeFile({{ fileName: outputPath }});
+}})().catch(err => {{
+  console.error(err);
+  process.exit(1);
+}});
+"""
+
+        sandbox.files.write(f"{session_dir}/generate_pptx.js", node_script)
+
+        result = sandbox.commands.run(
+            "node generate_pptx.js",
+            timeout=120,
+            cwd=session_dir,
+        )
+
+        assert result.exit_code == 0, f"Failed to create PPTX via html2pptx: {result.stderr or result.stdout}"
+
+        content = sandbox.files.read(output_path, format="bytes")
+        size = len(content)
+        assert size > 2000, f"PPTX file too small ({size} bytes), likely corrupt"
+
+        yield {
+            "content": content,
+            "expected_strings": ["Welcome", "Agenda", "Create file", "Read bytes", "Parse slides"],
+        }
+
+        manager.close_sandbox(test_user_id)
+
+    def test_pptx_zip_structure(self, created_pptx_content):
+        """PPTX should be a valid ZIP archive with slide contents."""
+        import zipfile
+
+        content = created_pptx_content["content"]
+        buffer = BytesIO(bytes(content))
+
+        try:
+            with zipfile.ZipFile(buffer, 'r') as zf:
+                names = zf.namelist()
+                assert "[Content_Types].xml" in names, "Missing [Content_Types].xml"
+                assert any(n.startswith("ppt/slides/slide") for n in names), "Missing slide XML files"
+        except zipfile.BadZipFile as e:
+            pytest.fail(f"Invalid PPTX ZIP structure: {e}")
+
+    def test_pptx_parseable_by_python_pptx(self, created_pptx_content):
+        """PPTX can be parsed by python-pptx."""
+        from pptx import Presentation
+
+        content = created_pptx_content["content"]
+        prs = Presentation(BytesIO(bytes(content)))
+
+        assert len(prs.slides) >= 2, "Expected at least two slides"
+
+    def test_pptx_contains_expected_text(self, created_pptx_content):
+        """PPTX slides contain expected text content."""
+        from pptx import Presentation
+
+        content = created_pptx_content["content"]
+        expected_strings = created_pptx_content["expected_strings"]
+
+        prs = Presentation(BytesIO(bytes(content)))
+
+        slide_text = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if getattr(shape, "has_text_frame", False):
+                    slide_text.append(shape.text)
+
+        full_text = "\n".join(slide_text)
+        for expected in expected_strings:
+            assert expected in full_text, f"Slide text '{expected}' not found"
 
 
 class TestEndToEndPipeline:

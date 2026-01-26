@@ -1,13 +1,18 @@
 import os
 import logging
 import time
+import weakref
 from pathlib import Path
 from typing import Optional, Dict
 from e2b_code_interpreter import Sandbox
+from dotenv import load_dotenv
 
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+# Load environment variables from the backend .env for local runs/tests
+load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=False)
 
 SANDBOX_ROOT = "/home/user"
 SANDBOX_TMP = f"{SANDBOX_ROOT}/tmp"
@@ -17,6 +22,7 @@ DEFAULT_SANDBOX_TIMEOUT = int(os.getenv("E2B_SANDBOX_TIMEOUT", "3600"))
 
 class SandboxManager:
     """Manages E2B sandbox lifecycle and operations."""
+    _instances = weakref.WeakSet()
     
     def __init__(self):
         self.api_key = os.getenv("E2B_API_KEY")
@@ -33,6 +39,7 @@ class SandboxManager:
         self.data_dir = Path(__file__).parent / "very_imp_data"
         self.scripts_dir = Path(__file__).parent / "scripts"
         self.skills_dir = Path(__file__).parent / "skills"
+        SandboxManager._instances.add(self)
 
     
     def create_sandbox(self, user_id: str) -> Sandbox:
@@ -341,3 +348,12 @@ class SandboxManager:
         """Close all sandboxes."""
         for user_id in list(self.sandboxes.keys()):
             self.close_sandbox(user_id)
+
+    @classmethod
+    def close_all_instances(cls):
+        """Close sandboxes across all manager instances (best-effort)."""
+        for manager in list(cls._instances):
+            try:
+                manager.close_all()
+            except Exception as e:
+                logger.error(f"Failed to close sandboxes for manager {manager}: {e}")
