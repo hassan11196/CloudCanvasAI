@@ -809,8 +809,8 @@ async def agent_event_generator(
         continue_conversation=is_resume,
         system_prompt=system_prompt,
         mcp_servers={"sandbox": sandbox_server} if sandbox_server else {},
-        stderr=_stderr_callback,
-        extra_args={"debug-to-stderr": None},
+        # stderr=_stderr_callback,
+        # extra_args={"debug-to-stderr": None},
     )
 
     async def _prompt_stream():
