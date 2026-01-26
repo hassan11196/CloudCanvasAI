@@ -30,21 +30,6 @@
   letter-spacing: 0.5px;
 }
 
-.refresh-btn {
-  background: transparent;
-  border: none;
-  color: #525252;
-  font-size: 14px;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  transition: color 0.15s, background 0.15s;
-}
-
-.refresh-btn:hover {
-  color: #e5e5e5;
-  background: #262626;
-}
 
 .file-list-loading,
 .file-list-error,
