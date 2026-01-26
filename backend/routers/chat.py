@@ -857,6 +857,7 @@ async def agent_event_generator(
                 for block in msg.content:
                     if isinstance(block, ThinkingBlock):
                         event = {'type': 'thinking', 'content': block.thinking}
+                        print(f"DEBUG: ThinkingBlock: {block.thinking}")
                         yield f"data: {json.dumps(event)}\n\n"
                     elif isinstance(block, ToolUseBlock):
                         # Store tool use by ID
@@ -882,6 +883,7 @@ async def agent_event_generator(
                             'tool_name': block.name,
                             'tool_input': block.input
                         }
+                        print(f"DEBUG: ToolUseBlock: {block.name} with input {block.input}")
                         yield f"data: {json.dumps(event)}\n\n"
                     elif isinstance(block, ToolResultBlock):
                         print(f"DEBUG: ToolResult for tool_use_id {block.tool_use_id}")
@@ -1009,6 +1011,7 @@ async def agent_event_generator(
                         yield f"data: {json.dumps(event)}\n\n"
 
             elif isinstance(msg, ResultMessage):
+                print(f"[stream] received ResultMessage for session {sid}")
                 if doc_intent and not files_emitted:
                     fail_event = {
                         "type": "status",
@@ -1034,6 +1037,7 @@ async def agent_event_generator(
                     "total_cost_usd": existing["total_cost_usd"],
                     "usage": existing["usage"],
                 }
+                print(f"[stream] session {sid} usage updated: {usage_event}")
                 yield f"data: {json.dumps(usage_event)}\n\n"
 
     except Exception as e:
