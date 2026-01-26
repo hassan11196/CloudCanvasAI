@@ -799,7 +799,7 @@ async def agent_event_generator(
     def _stderr_callback(line: str) -> None:
         stderr_lines.append(line)
         print(f"STDERR: {line}")
-
+    print(f"[stream] building agent options for session {sid}, is_resume={is_resume}")
     options = ClaudeAgentOptions(
         tools=[],
         allowed_tools=DOCUMENT_TOOLS,
@@ -813,6 +813,7 @@ async def agent_event_generator(
         # extra_args={"debug-to-stderr": None},
     )
 
+    print(f"[stream] starting agent query for session {sid}, doc_intent={doc_intent}")
     async def _prompt_stream():
         yield {
             "type": "user",
@@ -824,7 +825,7 @@ async def agent_event_generator(
     # Track pending tool uses by ID
     pending_tool_uses = {}
     known_files = set()
-    
+    print(f"[stream] initial known files: {known_files}")
     # Get initial file list from E2B sandbox
     if sandbox:
         try:
@@ -848,7 +849,7 @@ async def agent_event_generator(
                     known_files.add(logical_path)
         except Exception as e:
             print(f"Error listing initial files: {e}")
-
+    print(f"[stream] populated known files: {known_files}")
     try:
         async for msg in query(prompt=_prompt_stream(), options=options):
             if isinstance(msg, AssistantMessage):
