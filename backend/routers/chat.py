@@ -814,7 +814,7 @@ async def agent_event_generator(
         system_prompt=system_prompt,
         mcp_servers={"sandbox": sandbox_server} if sandbox_server else {},
         stderr=_stderr_callback,
-        # extra_args={"debug-to-stderr": None},
+        extra_args={"debug-to-stderr": None},
     )
 
     print(f"[stream] starting agent query for session {sid}, doc_intent={doc_intent}")
