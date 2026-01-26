@@ -25,32 +25,43 @@ const FILE_ICONS = {
 };
 
 function FileList({ sessionId, onFileSelect, selectedFile, refreshTrigger }) {
-  const [files, setFiles] = useState([]);
+  const [artifacts, setArtifacts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     if (sessionId) {
-      loadFiles();
+      loadArtifacts();
     } else {
-      setFiles([]);
+      setArtifacts([]);
     }
   }, [sessionId, refreshTrigger]);
 
-  const loadFiles = async () => {
+  // Auto-select an artifact when none (or a stale one) is selected
+  useEffect(() => {
+    const docFiles = artifacts.filter((file) => !file.is_dir && isDocumentFile(file.name));
+    if (docFiles.length === 0) return;
+
+    const selectedStillExists = docFiles.some((file) => file.path === selectedFile);
+    if (!selectedFile || !selectedStillExists) {
+      onFileSelect(docFiles[0].path);
+    }
+  }, [artifacts, selectedFile, onFileSelect]);
+
+  const loadArtifacts = async () => {
     setLoading(true);
     setError(null);
 
     try {
       const authHeader = await getAuthHeader();
-      const response = await fetch(`${API_BASE_URL}/files/${sessionId}/list`, {
+      const response = await fetch(`${API_BASE_URL}/files/${sessionId}/artifacts`, {
         headers: authHeader,
       });
       if (!response.ok) {
-        throw new Error('Failed to load files');
+        throw new Error('Failed to load artifacts');
       }
       const data = await response.json();
-      setFiles(data);
+      setArtifacts(data);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -72,7 +83,7 @@ function FileList({ sessionId, onFileSelect, selectedFile, refreshTrigger }) {
 
   const isDocumentFile = (filename) => {
     const ext = filename.split('.').pop()?.toLowerCase();
-    return ['docx', 'pdf', 'pptx', 'xlsx', 'txt', 'md', 'json', 'py', 'js', 'jsx', 'ts', 'tsx', 'css', 'html'].includes(ext);
+    return ['docx', 'pdf', 'pptx', 'xlsx', 'txt', 'md'].includes(ext);
   };
 
   if (!sessionId) {
@@ -86,34 +97,34 @@ function FileList({ sessionId, onFileSelect, selectedFile, refreshTrigger }) {
   return (
     <div className="file-list">
       <div className="file-list-header">
-        <span>Files</span>
-        <button className="refresh-btn" onClick={loadFiles} title="Refresh">
+        <span>Artifacts</span>
+        <button className="refresh-btn" onClick={loadArtifacts} title="Refresh">
           🔄
         </button>
       </div>
 
       {loading && (
         <div className="file-list-loading">
-          <span>Loading...</span>
+          <span>Loading artifacts...</span>
         </div>
       )}
 
       {error && (
         <div className="file-list-error">
           <span>⚠️ {error}</span>
-          <button onClick={loadFiles}>Retry</button>
+          <button onClick={loadArtifacts}>Retry</button>
         </div>
       )}
 
-      {!loading && !error && files.length === 0 && (
+      {!loading && !error && artifacts.length === 0 && (
         <div className="file-list-empty">
-          <p>No files yet</p>
+          <p>No artifacts yet</p>
         </div>
       )}
 
-      {!loading && !error && files.length > 0 && (
+      {!loading && !error && artifacts.length > 0 && (
         <div className="file-list-items">
-          {files.map((file) => (
+          {artifacts.map((file) => (
             <div
               key={file.path}
               className={`file-item ${file.path === selectedFile ? 'selected' : ''} ${!isDocumentFile(file.name) || file.is_dir ? 'disabled' : ''}`}

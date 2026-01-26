@@ -15,6 +15,7 @@ import {
 import './Chat.css';
 
 const STORAGE_KEY = 'zephior_chats';
+const ARTIFACT_EXTENSIONS = ['docx', 'pdf', 'pptx', 'xlsx', 'txt', 'md'];
 
 const createNewChat = () => ({
   id: Date.now().toString(),
@@ -44,6 +45,24 @@ const saveChatsToStorage = (chats) => {
   } catch (e) {
     console.error('Failed to save chats to storage:', e);
   }
+};
+
+const isArtifactPath = (path) => {
+  if (!path) return false;
+  const ext = path.split('.').pop()?.toLowerCase();
+  return ARTIFACT_EXTENSIONS.includes(ext);
+};
+
+const cleanAssistantContent = (content = '') => {
+  // Strip status noise like "doc_generation_requested: file.docx"
+  return content
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim().toLowerCase();
+      return trimmed && !trimmed.startsWith('doc_generation_requested');
+    })
+    .join('\n')
+    .trim();
 };
 
 // Get a clean description for tool actions
@@ -163,6 +182,7 @@ function Chat() {
   const [toolActivity, setToolActivity] = useState([]);
   const [thinkingSteps, setThinkingSteps] = useState([]);
   const [streamingContent, setStreamingContent] = useState('');
+  const [docStatus, setDocStatus] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [usageSummary, setUsageSummary] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
@@ -174,6 +194,7 @@ function Chat() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
+  const [creatingFile, setCreatingFile] = useState(null);
 
   // Sidebar state
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -253,9 +274,18 @@ function Chat() {
 
   const handleFileChange = (event) => {
     // Always open preview and select file when agent creates/modifies files
+    if (!isArtifactPath(event.path)) return;
     setSelectedFile(event.path);
     setPreviewOpen(true);
     setFileRefreshTrigger(prev => prev + 1);
+    if (creatingFile === event.path) {
+      setCreatingFile(null);
+    }
+    setDocStatus({
+      state: 'ready',
+      file: event.path,
+      message: `Ready: "${event.path}"`,
+    });
   };
 
   const handleSubmit = async (e) => {
@@ -275,6 +305,7 @@ function Chat() {
     setToolActivity([]);
     setThinkingSteps([]);
     setStatusMessage('');
+    setDocStatus(null);
     setUsageSummary(null);
     toolsRef.current = [];
     thinkingRef.current = [];
@@ -289,12 +320,31 @@ function Chat() {
         } else if (event.type === 'status') {
           if (event.content === 'doc_generation_requested') {
             const docPath = event.path || '';
-            if (docPath) {
+            if (docPath && isArtifactPath(docPath)) {
               setSelectedFile(docPath);
               setFileRefreshTrigger((prev) => prev + 1);
+              setCreatingFile(docPath);
             }
-            setPreviewOpen(true);
-            setStatusMessage(docPath ? `Document requested: ${docPath}` : 'Document generation requested');
+            if (docPath && isArtifactPath(docPath)) {
+              setDocStatus({
+                state: 'creating',
+                file: docPath,
+                message: docPath ? `Creating "${docPath}"` : 'Generating artifact',
+              });
+              setPreviewOpen(true);
+              setStatusMessage(docPath ? `Creating ${docPath}...` : 'Artifact generation requested');
+            }
+          } else if (event.content === 'doc_generation_failed') {
+            const docPath = event.path || selectedFile || '';
+            if (docPath && isArtifactPath(docPath)) {
+              setDocStatus({
+                state: 'failed',
+                file: docPath,
+                message: docPath ? `Creation failed for "${docPath}"` : 'Artifact generation failed',
+              });
+              setStatusMessage(docPath ? `Creation failed for ${docPath}` : 'Artifact generation failed');
+              setCreatingFile(null);
+            }
           } else {
             setStatusMessage(event.content || '');
           }
@@ -314,6 +364,11 @@ function Chat() {
             return updated;
           });
         } else if (event.type === 'text_delta') {
+          // Filter out raw status lines that shouldn't show as user-facing text
+          const trimmed = (event.content || '').trim().toLowerCase();
+          if (trimmed.startsWith('doc_generation_requested') || trimmed.startsWith('doc_generation_failed')) {
+            return;
+          }
           setStreamingContent((prev) => prev + event.content);
         } else if (event.type === 'file_change') {
           handleFileChange(event);
@@ -329,9 +384,10 @@ function Chat() {
         }
       },
       (content) => {
+        const cleanedContent = cleanAssistantContent(content);
         setChats((prev) => prev.map((c) =>
           c.id === activeChatId
-            ? { ...c, messages: [...c.messages, { role: 'assistant', content, tools: [...toolsRef.current] }] }
+            ? { ...c, messages: [...c.messages, { role: 'assistant', content: cleanedContent, tools: [...toolsRef.current] }] }
             : c
         ));
         setIsLoading(false);
@@ -340,6 +396,7 @@ function Chat() {
         setStatusMessage('');
         setUsageSummary(null);
         setStreamingContent('');
+        setCreatingFile(null);
       },
       (error) => {
         setChats((prev) => prev.map((c) =>
@@ -353,6 +410,7 @@ function Chat() {
         setStatusMessage('');
         setUsageSummary(null);
         setStreamingContent('');
+        setCreatingFile(null);
       }
     );
   };
@@ -526,6 +584,26 @@ function Chat() {
                     )}
                   </div>
                 )}
+                {docStatus && (
+                  <div className={`doc-status doc-status-${docStatus.state}`}>
+                    <div className="doc-status-main">
+                      <span className="doc-status-icon">
+                        {docStatus.state === 'creating' && '🛠️'}
+                        {docStatus.state === 'ready' && '✅'}
+                        {docStatus.state === 'failed' && '⚠️'}
+                      </span>
+                      <div>
+                        <div className="doc-status-label">Document status</div>
+                        <div className="doc-status-text">{docStatus.message}</div>
+                      </div>
+                    </div>
+                    {docStatus.file && (
+                      <span className="doc-status-file">
+                        {docStatus.file.split('/').pop()}
+                      </span>
+                    )}
+                  </div>
+                )}
                 {thinkingSteps.length > 0 && (
                   <div className="thinking-indicator">
                     <span className="thinking-dot" />
@@ -576,15 +654,15 @@ function Chat() {
 
       {/* Preview Panel */}
       {previewOpen && (
-        <div className="preview-panel">
-          <div className="preview-panel-header">
-            <span className="preview-title">
-              {selectedFile ? selectedFile.split('/').pop() : 'Document Preview'}
-            </span>
-            <div className="preview-actions">
-              <button onClick={() => setFileRefreshTrigger(prev => prev + 1)} title="Refresh">
-                ↻
-              </button>
+          <div className="preview-panel">
+            <div className="preview-panel-header">
+              <span className="preview-title">
+                {selectedFile ? selectedFile.split('/').pop() : 'Artifacts'}
+              </span>
+              <div className="preview-actions">
+                <button onClick={() => setFileRefreshTrigger(prev => prev + 1)} title="Refresh">
+                  ↻
+                </button>
               <button onClick={() => setPreviewOpen(false)} title="Close">
                 ×
               </button>
@@ -599,7 +677,9 @@ function Chat() {
           <DocumentPreview
             sessionId={activeChat.sessionId}
             filePath={selectedFile}
+            creatingFile={creatingFile}
             onClose={() => setPreviewOpen(false)}
+            refreshTrigger={fileRefreshTrigger}
           />
         </div>
       )}
