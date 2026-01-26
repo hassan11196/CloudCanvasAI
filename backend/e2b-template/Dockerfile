@@ -32,3 +32,5 @@ RUN npm install -g \
     && npm cache clean --force
 
 RUN mkdir -p /home/user/tmp /home/user/workspace
+RUN mkdir -p /home/user/workspace/skills
+COPY skills/ /home/user/workspace/skills/

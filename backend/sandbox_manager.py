@@ -94,7 +94,7 @@ class SandboxManager:
         
         # Initialize sandbox with template files
         init_start = time.monotonic()
-        self._initialize_sandbox(sandbox)
+        # self._initialize_sandbox(sandbox)
         logger.info(
             "[sandbox] initialize duration=%.3fs sandbox_id=%s",
             time.monotonic() - init_start,
@@ -158,49 +158,31 @@ class SandboxManager:
 
     def _initialize_sandbox(self, sandbox: Sandbox):
         """Initialize sandbox with template files, scripts, and skills."""
-        logger.info("Initializing sandbox with template files")
+        print("Initializing sandbox with template files")
         self._ensure_root_dir(sandbox)
 
         # Copy template data files
-        if self.data_dir.exists():
-            file_count = 0
-            for file_path in self.data_dir.glob("*"):
-                if file_path.is_file():
-                    try:
-                        content = file_path.read_bytes()
-                        sandbox.files.write(f"{SANDBOX_ROOT}/{file_path.name}", content)
-                        file_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to copy data file {file_path.name}: {e}")
-            logger.info(f"Copied {file_count} template data files")
-
-        # Copy scripts
-        if self.scripts_dir.exists():
-            try:
-                sandbox.files.make_dir(f"{SANDBOX_ROOT}/scripts")
-            except Exception:
-                pass  # Directory may already exist
-
-            script_count = 0
-            for file_path in self.scripts_dir.glob("*.py"):
-                if file_path.is_file():
-                    try:
-                        content = file_path.read_bytes()
-                        sandbox.files.write(f"{SANDBOX_ROOT}/scripts/{file_path.name}", content)
-                        script_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to copy script {file_path.name}: {e}")
-            logger.info(f"Copied {script_count} script files")
+        # if self.data_dir.exists():
+        #     file_count = 0
+        #     for file_path in self.data_dir.glob("*"):
+        #         if file_path.is_file():
+        #             try:
+        #                 content = file_path.read_bytes()
+        #                 sandbox.files.write(f"{SANDBOX_ROOT}/{file_path.name}", content)
+        #                 file_count += 1
+        #             except Exception as e:
+        #                 logger.warning(f"Failed to copy data file {file_path.name}: {e}")
+        #     logger.info(f"Copied {file_count} template data files")
 
         # Copy skills directory to Claude SDK location
-        if self.skills_dir.exists():
-            logger.info("Copying skills directory to Claude SDK location")
+        # if self.skills_dir.exists():
+            # logger.info("Copying skills directory to Claude SDK location")
             # Copy to the primary Claude SDK skills directory
-            self._copy_directory_to_sandbox(sandbox, self.skills_dir, "/etc/claude-code/.claude/skills")
+            # self._copy_directory_to_sandbox(sandbox, self.skills_dir, "/etc/claude-code/.claude/skills")
             # Also copy to the user skills directory as a fallback
-            self._copy_directory_to_sandbox(sandbox, self.skills_dir, "/root/.claude/skills")
-            self._copy_directory_to_sandbox(sandbox, self.skills_dir, f"{SANDBOX_ROOT}/skills")
-            logger.info("Sandbox initialization complete")
+            # self._copy_directory_to_sandbox(sandbox, self.skills_dir, "/root/.claude/skills")
+            # self._copy_directory_to_sandbox(sandbox, self.skills_dir, f"{SANDBOX_ROOT}/skills")
+            # logger.info("Sandbox initialization complete")
     
     def _copy_directory_to_sandbox(self, sandbox: Sandbox, local_dir: Path, remote_path: str):
         """Recursively copy a directory to the sandbox."""
@@ -362,7 +344,7 @@ class SandboxManager:
 
             try:
                 logger.info(f"Closing sandbox {sandbox_id} for user {user_id}")
-                sandbox.close()
+                sandbox.kill()  # E2B SDK uses kill() not close()
                 logger.info(f"Successfully closed sandbox {sandbox_id}")
             except Exception as e:
                 logger.error(f"Error closing sandbox {sandbox_id}: {e}")

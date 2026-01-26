@@ -49,16 +49,15 @@ SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
 # System prompt for document creation capabilities
 DOCUMENT_SYSTEM_PROMPT = """
-You are Zephior, an AI assistant with document creation capabilities.
+You are Zephior Canvas, an AI assistant with document creation and edit capabilities.
 """
 SKILL_NAMES = ("docx", "pdf", "pptx", "xlsx")
 SKILL_PATH_NOTE = (
-    "Skill assets are available under /home/user/skills/{docx,pdf,pptx,xlsx}. "
+    "Skill assets are available under /home/user/workspace/skills/{docx,pdf,pptx,xlsx}. "
     "When instructions reference relative paths like ooxml/scripts or scripts/thumbnail.py, "
-    "run them from the appropriate skill directory or use absolute paths under /home/user/skills. "
-    "Use /home/user/workspace for working files and /home/user/tmp for temporary files. "
-    "If Node.js or docx-js dependencies are unavailable, prefer /home/user/scripts/create_docx.py "
-    "to generate .docx files."
+    "run them from the appropriate skill directory or use absolute paths under /home/user/workspace/skills. "
+    "Use /home/user/workspace for working files and /home/user/tmp for temporary files."
+
 )
 
 FILE_KEYWORDS = {
@@ -85,6 +84,9 @@ FILE_KEYWORDS = {
     "deck",
 }
 
+DOC_NAME_PATTERN = re.compile(r"([\w.-]+\.(?:docx|pptx|xlsx|pdf))", re.IGNORECASE)
+DOC_REQUEST_TRIGGERS = ("create", "generate", "make", "draft", "write", "build", "produce")
+
 
 def should_use_sandbox(message: str) -> bool:
     lowered = message.lower()
@@ -94,6 +96,20 @@ def should_use_sandbox(message: str) -> bool:
         if keyword in lowered:
             return True
     return False
+
+
+def extract_requested_doc_name(message: str) -> Optional[str]:
+    match = DOC_NAME_PATTERN.search(message)
+    if match:
+        return match.group(1)
+    return None
+
+
+def is_doc_generation_request(message: str) -> bool:
+    lowered = message.lower()
+    if not should_use_sandbox(lowered):
+        return False
+    return any(trigger in lowered for trigger in DOC_REQUEST_TRIGGERS)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -217,12 +233,78 @@ def scan_for_new_documents(sandbox, known_files: set, session_id: str) -> list[s
     return new_files
 
 
+def scan_for_new_documents_global(sandbox, known_files: set, session_id: str) -> list[str]:
+    """Fallback scan for document files outside the session workspace."""
+    new_files = []
+    scan_dir = SANDBOX_WORKSPACE
+    try:
+        entries = _iter_sandbox_files(sandbox, scan_dir, base_root=SANDBOX_ROOT)
+        for rel_path, is_dir in entries:
+            if is_dir:
+                continue
+            if not any(rel_path.endswith(ext) for ext in DOCUMENT_EXTENSIONS):
+                continue
+            logical_path = _ensure_session_copy(sandbox, session_id, f"{SANDBOX_ROOT}/{rel_path}")
+            if not logical_path:
+                continue
+            if logical_path not in known_files:
+                new_files.append(logical_path)
+                known_files.add(logical_path)
+    except Exception:
+        pass
+
+    return new_files
+
+
 def is_document_file(file_path: str) -> bool:
     """Check if file is a document type we want to preview."""
     if not file_path:
         return False
     ext = Path(file_path).suffix.lower()
     return ext in DOCUMENT_EXTENSIONS
+
+
+def validate_file_in_sandbox(sandbox, file_path: str, min_size: int = 100) -> bool:
+    """
+    Validate that a file exists in the sandbox and has meaningful content.
+
+    Args:
+        sandbox: E2B sandbox instance
+        file_path: Full path to the file in sandbox
+        min_size: Minimum file size in bytes to consider valid (default 100 for docx)
+
+    Returns:
+        True if file exists and has content >= min_size, False otherwise
+    """
+    if not sandbox or not file_path:
+        return False
+
+    try:
+        # Determine if file is binary based on extension
+        ext = Path(file_path).suffix.lower()
+        binary_extensions = {'.docx', '.pptx', '.xlsx', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.zip'}
+        is_binary = ext in binary_extensions
+
+        # CRITICAL: Use format="bytes" for binary files to get accurate size
+        # and prevent UTF-8 decoding issues
+        read_format = "bytes" if is_binary else "text"
+
+        content = sandbox.files.read(file_path, format=read_format)
+        if content is None:
+            return False
+
+        # Get byte length
+        if isinstance(content, (bytes, bytearray)):
+            size = len(content)
+        elif isinstance(content, str):
+            size = len(content.encode('utf-8'))
+        else:
+            return False
+
+        return size >= min_size
+    except Exception as e:
+        logger.debug(f"File validation failed for {file_path}: {e}")
+        return False
 
 
 def _extract_tool_path(tool_input: dict) -> Optional[str]:
@@ -241,6 +323,59 @@ def _resolve_sandbox_path(path: Optional[str]) -> str:
     if not resolved.is_relative_to(PurePosixPath(SANDBOX_ROOT)):
         raise ValueError("Path escapes sandbox root")
     return str(resolved)
+
+
+def _ensure_session_copy(sandbox, session_id: str, file_path: str) -> Optional[str]:
+    """Ensure a document file is available inside the session workspace folder."""
+    if not file_path or not sandbox:
+        return None
+
+    posix_path = PurePosixPath(file_path)
+    session_dir = PurePosixPath(session_workspace_dir(session_id))
+
+    # If already within session workspace, nothing to do.
+    if posix_path.is_absolute():
+        try:
+            if posix_path.is_relative_to(session_dir):
+                return session_logical_path(session_id, file_path)
+        except AttributeError:
+            if str(posix_path).startswith(str(session_dir)):
+                return session_logical_path(session_id, file_path)
+
+    logical_path = session_logical_path(session_id, file_path)
+    if not logical_path:
+        return None
+
+    target_path = session_storage_path(session_id, logical_path)
+
+    if not posix_path.is_absolute():
+        return logical_path
+
+    source_path = str(posix_path)
+
+    if source_path == target_path:
+        return logical_path
+
+    # Read the source file (use bytes for binary docs to avoid corruption)
+    try:
+        ext = posix_path.suffix.lower()
+        binary_exts = {'.docx', '.pptx', '.xlsx', '.pdf'}
+        read_format = "bytes" if ext in binary_exts else "text"
+        content = sandbox.files.read(source_path, format=read_format)
+    except Exception:
+        return None
+
+    try:
+        sandbox.files.make_dir(str(PurePosixPath(target_path).parent))
+    except Exception:
+        pass
+
+    try:
+        sandbox.files.write(target_path, content)
+    except Exception:
+        return None
+
+    return logical_path
 
 
 def _iter_sandbox_files(sandbox, root_path: str, base_root: str = SANDBOX_ROOT) -> list[tuple[str, bool]]:
@@ -363,6 +498,10 @@ def _build_sandbox_mcp_server(sandbox, session_id: str):
             file_path = _extract_tool_path(args)
             if not file_path:
                 raise ValueError("file_path is required")
+            try:
+                sandbox.files.make_dir(session_workspace_dir(session_id))
+            except Exception:
+                pass
             content = None
             if not PurePosixPath(file_path).is_absolute():
                 session_path = session_storage_path(session_id, file_path)
@@ -412,6 +551,7 @@ def _build_sandbox_mcp_server(sandbox, session_id: str):
             file_path = _extract_tool_path(args)
             if not file_path:
                 raise ValueError("file_path is required")
+            _ensure_session_dir()
             target_path = session_storage_path(session_id, file_path)
             content = sandbox.files.read(target_path)
             if isinstance(content, bytes):
@@ -555,20 +695,46 @@ async def agent_event_generator(
 ):
     """Generate SSE events from Claude agent execution."""
     use_sandbox = should_use_sandbox(message)
+    sandbox = None
+    existing_sandbox = sandbox_manager.get_sandbox(user_id) if session_id else None
+
     if use_sandbox:
         yield f"data: {json.dumps({'type': 'status', 'content': 'Starting sandbox'})}\n\n"
         print("[stream] sandbox requested user_id=%s session_id=%s", user_id, session_id)
         sid, sandbox = get_or_create_session(user_id, session_id)
         is_resume = session_id is not None
         SESSION_USERS[sid] = user_id
+    elif existing_sandbox:
+        # Fallback: reuse existing sandbox even if heuristic didn't trigger
+        sandbox = existing_sandbox
+        sid = session_id or str(uuid.uuid4())
+        is_resume = session_id is not None
+        SESSION_USERS[sid] = user_id
+        use_sandbox = True
+        yield f"data: {json.dumps({'type': 'status', 'content': 'Resuming sandbox'})}\n\n"
     else:
         sid = session_id or str(uuid.uuid4())
         sandbox = None
         is_resume = bool(session_id)
         SESSION_USERS[sid] = user_id
 
+    doc_generation_announced: set[str] = set()
+    doc_intent = use_sandbox and is_doc_generation_request(message)
+    files_emitted = False
+
     yield f"data: {json.dumps({'type': 'session', 'session_id': sid})}\n\n"
     yield f"data: {json.dumps({'type': 'status', 'content': 'Preparing agent'})}\n\n"
+
+    if use_sandbox and is_doc_generation_request(message):
+        requested_name = extract_requested_doc_name(message)
+        status_event = {
+            "type": "status",
+            "content": "doc_generation_requested",
+        }
+        if requested_name:
+            status_event["path"] = requested_name
+            doc_generation_announced.add(requested_name)
+        yield f"data: {json.dumps(status_event)}\n\n"
 
     # Load system prompt from SKILL.md if available
     skill_prompt = DOCUMENT_SYSTEM_PROMPT.strip()
@@ -589,6 +755,8 @@ async def agent_event_generator(
         f"\n\nSession file rule: store generated files in {session_workspace_dir(sid)} "
         "without including the session ID in filenames. Create the session folder if needed."
         "\nWhen starting document creation, emit a status update labelled 'doc_generation_requested' along with the intended document name."
+        "\nAlways create files directly using the sandbox tools (Write/Edit/Bash) without asking for permission. "
+        "If a tool call fails, retry once using python-docx via Bash and ensure the output is saved under the session workspace folder."
     )
 
     sandbox_server = _build_sandbox_mcp_server(sandbox, sid) if sandbox else None
@@ -600,8 +768,8 @@ async def agent_event_generator(
 
     options = ClaudeAgentOptions(
         tools=[],
-        allowed_tools=DOCUMENT_TOOLS if sandbox_server else [],
-        permission_mode="dontAsk",
+        allowed_tools=DOCUMENT_TOOLS,
+        permission_mode="bypassPermissions",
         cwd=None,
         resume=sid if is_resume else None,
         continue_conversation=is_resume,
@@ -622,7 +790,6 @@ async def agent_event_generator(
     # Track pending tool uses by ID
     pending_tool_uses = {}
     known_files = set()
-    doc_generation_announced: set[str] = set()
     
     # Get initial file list from E2B sandbox
     if sandbox:
@@ -701,7 +868,7 @@ async def agent_event_generator(
                                 if tool_use['name'] in ("Edit", "replace_file_content", "multi_replace_file_content"):
                                     action = "modified"
 
-                                logical_path = session_logical_path(sid, file_path)
+                                logical_path = _ensure_session_copy(sandbox, sid, file_path)
                                 if logical_path and logical_path not in doc_generation_announced and is_document_file(logical_path):
                                     doc_generation_announced.add(logical_path)
                                     status_event = {
@@ -710,20 +877,34 @@ async def agent_event_generator(
                                         'path': logical_path,
                                     }
                                     yield f"data: {json.dumps(status_event)}\n\n"
-                                file_event = {
-                                    'type': 'file_change',
-                                    'path': logical_path,
-                                    'action': action,
-                                    'timestamp': time.time()
-                                }
-                                yield f"data: {json.dumps(file_event)}\n\n"
-                                known_files.add(logical_path)
+
+                                # Validate file exists with content before emitting file_change
+                                if logical_path:
+                                    full_path = session_storage_path(sid, logical_path)
+                                    # For binary docs (docx, pptx, xlsx, pdf), require min 100 bytes
+                                    # For text files, just require non-empty
+                                    ext = Path(logical_path).suffix.lower()
+                                    min_size = 100 if ext in {'.docx', '.pptx', '.xlsx', '.pdf'} else 1
+
+                                    if validate_file_in_sandbox(sandbox, full_path, min_size):
+                                        file_event = {
+                                            'type': 'file_change',
+                                            'path': logical_path,
+                                            'action': action,
+                                            'timestamp': time.time()
+                                        }
+                                        yield f"data: {json.dumps(file_event)}\n\n"
+                                        known_files.add(logical_path)
+                                        files_emitted = True
+                                    else:
+                                        print(f"DEBUG: File validation failed for {full_path}, skipping file_change event")
 
                             # Also scan for any new document files after Bash commands
                             if tool_use['name'] in ("Bash", "run_command"):
                                 new_docs = scan_for_new_documents(sandbox, known_files, sid)
                                 print(f"DEBUG: Scanned new docs: {new_docs}")
                                 for doc_path in new_docs:
+                                    doc_path = _ensure_session_copy(sandbox, sid, doc_path) or doc_path
                                     if doc_path not in doc_generation_announced and is_document_file(doc_path):
                                         doc_generation_announced.add(doc_path)
                                         status_event = {
@@ -732,13 +913,54 @@ async def agent_event_generator(
                                             'path': doc_path,
                                         }
                                         yield f"data: {json.dumps(status_event)}\n\n"
-                                    file_event = {
-                                        'type': 'file_change',
-                                        'path': doc_path,
-                                        'action': 'created',
-                                        'timestamp': time.time()
-                                    }
-                                    yield f"data: {json.dumps(file_event)}\n\n"
+
+                                    # Validate file before emitting file_change
+                                    full_path = session_storage_path(sid, doc_path)
+                                    ext = Path(doc_path).suffix.lower()
+                                    min_size = 100 if ext in {'.docx', '.pptx', '.xlsx', '.pdf'} else 1
+
+                                    if validate_file_in_sandbox(sandbox, full_path, min_size):
+                                        file_event = {
+                                            'type': 'file_change',
+                                            'path': doc_path,
+                                            'action': 'created',
+                                            'timestamp': time.time()
+                                        }
+                                        yield f"data: {json.dumps(file_event)}\n\n"
+                                        known_files.add(doc_path)
+                                        files_emitted = True
+                                    else:
+                                        print(f"DEBUG: File validation failed for {full_path}, skipping file_change")
+
+                                fallback_docs = scan_for_new_documents_global(sandbox, known_files, sid)
+                                print(f"DEBUG: Scanned global docs: {fallback_docs}")
+                                for doc_path in fallback_docs:
+                                    if doc_path not in doc_generation_announced and is_document_file(doc_path):
+                                        doc_generation_announced.add(doc_path)
+                                        status_event = {
+                                            'type': 'status',
+                                            'content': 'doc_generation_requested',
+                                            'path': doc_path,
+                                        }
+                                        yield f"data: {json.dumps(status_event)}\n\n"
+
+                                    # Validate file before emitting file_change
+                                    full_path = session_storage_path(sid, doc_path)
+                                    ext = Path(doc_path).suffix.lower()
+                                    min_size = 100 if ext in {'.docx', '.pptx', '.xlsx', '.pdf'} else 1
+
+                                    if validate_file_in_sandbox(sandbox, full_path, min_size):
+                                        file_event = {
+                                            'type': 'file_change',
+                                            'path': doc_path,
+                                            'action': 'created',
+                                            'timestamp': time.time()
+                                        }
+                                        yield f"data: {json.dumps(file_event)}\n\n"
+                                        known_files.add(doc_path)
+                                        files_emitted = True
+                                    else:
+                                        print(f"DEBUG: File validation failed for {full_path}, skipping file_change")
                             
                             # Clean up processed tool use
                             del pending_tool_uses[block.tool_use_id]
@@ -751,6 +973,13 @@ async def agent_event_generator(
                         yield f"data: {json.dumps(event)}\n\n"
 
             elif isinstance(msg, ResultMessage):
+                if doc_intent and not files_emitted:
+                    fail_event = {
+                        "type": "status",
+                        "content": "doc_generation_failed",
+                        "path": next(iter(doc_generation_announced), None),
+                    }
+                    yield f"data: {json.dumps(fail_event)}\n\n"
                 event = {'type': 'complete', 'content': msg.result or ''}
                 yield f"data: {json.dumps(event)}\n\n"
                 usage = msg.usage or {}
