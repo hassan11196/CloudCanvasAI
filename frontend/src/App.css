@@ -15,6 +15,13 @@
   background-color: #171717;
   border-bottom: 1px solid #262626;
   flex-shrink: 0;
+  justify-content: space-between;
+}
+
+.nav-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
 }
 
 .nav-brand {
@@ -37,6 +44,34 @@
   border-radius: 6px;
   color: #a3a3a3;
   font-size: 14px;
+}
+
+.nav-logout {
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid #262626;
+  background: #111;
+  color: #e5e5e5;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.nav-logout:hover {
+  background: #1f1f1f;
+  border-color: #333;
+}
+
+.nav-logout:active {
+  transform: translateY(1px);
+}
+
+.nav-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  min-width: 120px;
 }
 
 .nav a:hover {

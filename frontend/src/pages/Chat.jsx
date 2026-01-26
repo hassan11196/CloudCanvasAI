@@ -9,7 +9,6 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signOut,
   onAuthStateChanged,
 } from '../services/firebase';
 import './Chat.css';
@@ -484,10 +483,6 @@ function Chat() {
     }
   };
 
-  const handleSignOut = async () => {
-    await signOut(auth);
-  };
-
   const handleDownloadSelected = async () => {
     if (!activeChat.sessionId || !selectedFile) return;
     try {
@@ -512,6 +507,9 @@ function Chat() {
       console.error('Download failed:', err);
     }
   };
+
+  const userInitial = (currentUser?.displayName || currentUser?.email || 'U')?.[0]?.toUpperCase() || 'U';
+  const userName = currentUser?.displayName || currentUser?.email || 'Signed in';
 
   if (isAuthChecking) {
     return (
@@ -574,9 +572,6 @@ function Chat() {
           <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)} title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}>
             {sidebarOpen ? '‹' : '›'}
           </button>
-          <button className="sidebar-auth" onClick={handleSignOut} title="Sign out">
-            ⎋
-          </button>
         </div>
         {sidebarOpen && (
           <div className="chat-list">
@@ -597,6 +592,28 @@ function Chat() {
             ))}
           </div>
         )}
+        <div className="sidebar-footer">
+          {currentUser && (
+            <div className={`sidebar-user ${sidebarOpen ? '' : 'collapsed'}`}>
+              {currentUser.photoURL ? (
+                <img
+                  src={currentUser.photoURL}
+                  alt={userName}
+                  className="sidebar-avatar-img"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="sidebar-avatar-fallback">{userInitial}</div>
+              )}
+              {sidebarOpen && (
+                <div className="sidebar-user-text">
+                  <div className="sidebar-user-name">{userName}</div>
+                  {currentUser.email && <div className="sidebar-user-email">{currentUser.email}</div>}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Main Chat */}

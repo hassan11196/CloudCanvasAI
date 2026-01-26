@@ -1,4 +1,6 @@
 import { Routes, Route, Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { auth, onAuthStateChanged, signOut } from './services/firebase'
 import Chat from './pages/Chat'
 import './App.css'
 
@@ -29,14 +31,36 @@ function Home() {
   )
 }
 
+function NavAuthButton() {
+  const [navUser, setNavUser] = useState(() => auth.currentUser);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, setNavUser);
+    return () => unsubscribe();
+  }, []);
+
+  if (!navUser) return null;
+
+  return (
+    <button className="nav-logout" onClick={() => signOut(auth)} title="Sign out">
+      ⎋ Logout
+    </button>
+  );
+}
+
 function App() {
   return (
     <div className="app">
       <nav className="nav">
-        <div className="nav-brand">Claude Canvas</div>
-        <div className="nav-links">
-          <Link to="/">Home</Link>
-          <Link to="/chat">Chat</Link>
+        <div className="nav-left">
+          <div className="nav-brand">Claude Canvas</div>
+          <div className="nav-links">
+            <Link to="/">Home</Link>
+            <Link to="/chat">Chat</Link>
+          </div>
+        </div>
+        <div className="nav-right">
+          <NavAuthButton />
         </div>
       </nav>
       <main>
