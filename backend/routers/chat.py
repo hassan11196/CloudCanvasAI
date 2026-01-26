@@ -734,28 +734,22 @@ async def agent_event_generator(
     session_id: Optional[str] = None,
 ):
     """Generate SSE events from Claude agent execution."""
-    use_sandbox = should_use_sandbox(message)
+    # All requests must run inside the E2B sandbox; disable host-only execution paths
+    use_sandbox = True
     sandbox = None
     existing_sandbox = sandbox_manager.get_sandbox(user_id) if session_id else None
 
-    if use_sandbox:
+    if existing_sandbox:
+        sandbox = existing_sandbox
+        sid = session_id or str(uuid.uuid4())
+        is_resume = True
+        SESSION_USERS[sid] = user_id
+        yield f"data: {json.dumps({'type': 'status', 'content': 'Resuming sandbox'})}\n\n"
+    else:
         yield f"data: {json.dumps({'type': 'status', 'content': 'Starting sandbox'})}\n\n"
         print("[stream] sandbox requested user_id=%s session_id=%s", user_id, session_id)
         sid, sandbox = get_or_create_session(user_id, session_id)
         is_resume = session_id is not None
-        SESSION_USERS[sid] = user_id
-    elif existing_sandbox:
-        # Fallback: reuse existing sandbox even if heuristic didn't trigger
-        sandbox = existing_sandbox
-        sid = session_id or str(uuid.uuid4())
-        is_resume = session_id is not None
-        SESSION_USERS[sid] = user_id
-        use_sandbox = True
-        yield f"data: {json.dumps({'type': 'status', 'content': 'Resuming sandbox'})}\n\n"
-    else:
-        sid = session_id or str(uuid.uuid4())
-        sandbox = None
-        is_resume = bool(session_id)
         SESSION_USERS[sid] = user_id
 
     doc_generation_announced: set[str] = set()
