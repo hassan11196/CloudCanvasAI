@@ -802,17 +802,18 @@ async def agent_event_generator(
     def _stderr_callback(line: str) -> None:
         stderr_lines.append(line)
         print(f"STDERR: {line}")
+        
     print(f"[stream] building agent options for session {sid}, is_resume={is_resume}")
     options = ClaudeAgentOptions(
         tools=[],
         allowed_tools=DOCUMENT_TOOLS,
-        permission_mode="default",
+        permission_mode="bypassPermissions",
         cwd=None,
         resume=sid if is_resume else None,
         continue_conversation=is_resume,
         system_prompt=system_prompt,
         mcp_servers={"sandbox": sandbox_server} if sandbox_server else {},
-        # stderr=_stderr_callback,
+        stderr=_stderr_callback,
         # extra_args={"debug-to-stderr": None},
     )
 
