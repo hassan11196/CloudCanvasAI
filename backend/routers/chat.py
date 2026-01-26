@@ -792,7 +792,7 @@ async def agent_event_generator(
         "\nAlways create files directly using the sandbox tools (Write/Edit/Bash) without asking for permission. "
         "If a tool call fails, retry once using python-docx via Bash and ensure the output is saved under the session workspace folder."
     )
-
+    print(f"[stream] system prompt prepared, length={len(system_prompt)}")
     sandbox_server = _build_sandbox_mcp_server(sandbox, sid) if sandbox else None
     stderr_lines: list[str] = []
 
