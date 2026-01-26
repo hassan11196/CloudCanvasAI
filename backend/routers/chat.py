@@ -23,6 +23,7 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
     ClaudeAgentOptions,
     AssistantMessage,
+    SystemMessage,
     ResultMessage,
     TextBlock,
     ThinkingBlock,
@@ -77,7 +78,7 @@ def _ensure_host_skills_available() -> None:
                 else:
                     shutil.copy2(skill, dest)
         except Exception as exc:
-            logger.warning("Unable to prepare skills in %s: %s", target, exc)
+            print.warning("Unable to prepare skills in %s: %s", target, exc)
 
     # Ensure the agent looks at the bundled skills even if managed dir prep fails
     os.environ.setdefault("CLAUDE_PROJECT_DIR", str(Path(__file__).parent.parent))
@@ -85,8 +86,10 @@ def _ensure_host_skills_available() -> None:
 
 
 # Prepare host skills on import so server-side agent startups don't fail on missing paths
-_ensure_host_skills_available()
-
+try:
+    _ensure_host_skills_available()
+except Exception as e:
+    print("Error ensuring host skills availability: %s", e)
 # System prompt for document creation capabilities
 DOCUMENT_SYSTEM_PROMPT = """
 You are Zephior Canvas, an AI assistant with document creation and edit capabilities.
@@ -854,6 +857,7 @@ async def agent_event_generator(
         async for msg in query(prompt=_prompt_stream(), options=options):
             print(f"[stream] received agent message of type {type(msg)}")
             if isinstance(msg, AssistantMessage):
+                print(f"DEBUG: AssistantMessage with {len(msg.content)} blocks")
                 for block in msg.content:
                     if isinstance(block, ThinkingBlock):
                         event = {'type': 'thinking', 'content': block.thinking}
@@ -1009,6 +1013,26 @@ async def agent_event_generator(
                     elif isinstance(block, TextBlock):
                         event = {'type': 'text_delta', 'content': block.text}
                         yield f"data: {json.dumps(event)}\n\n"
+
+            elif isinstance(msg, SystemMessage):
+                # Surface system messages to the client and continue the stream instead of crashing
+                sys_text = []
+                try:
+                    for block in getattr(msg, "content", []) or []:
+                        if isinstance(block, TextBlock):
+                            sys_text.append(block.text)
+                        else:
+                            sys_text.append(str(block))
+                except Exception as exc:
+                    sys_text.append(f"(unreadable system content: {exc})")
+
+                payload = {
+                    "type": "status",
+                    "content": "system_message",
+                    "detail": "\n".join(sys_text).strip(),
+                }
+                print(f"[stream] forwarding SystemMessage: {payload}")
+                yield f"data: {json.dumps(payload)}\n\n"
 
             elif isinstance(msg, ResultMessage):
                 print(f"[stream] received ResultMessage for session {sid}")
