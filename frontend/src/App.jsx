@@ -33,8 +33,11 @@ function App() {
   return (
     <div className="app">
       <nav className="nav">
-        <Link to="/">Home</Link>
-        <Link to="/chat">Chat</Link>
+        <div className="nav-brand">Claude Canvas</div>
+        <div className="nav-links">
+          <Link to="/">Home</Link>
+          <Link to="/chat">Chat</Link>
+        </div>
       </nav>
       <main>
         <Routes>
