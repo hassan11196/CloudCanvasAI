@@ -29,6 +29,11 @@ function FileList({ sessionId, onFileSelect, selectedFile, refreshToken, onListU
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const inFlightRef = useRef(false);
+  const onListUpdateRef = useRef(onListUpdate);
+
+  useEffect(() => {
+    onListUpdateRef.current = onListUpdate;
+  }, [onListUpdate]);
 
   const loadArtifacts = useCallback(async (silent = false) => {
     if (!sessionId) {
@@ -53,8 +58,8 @@ function FileList({ sessionId, onFileSelect, selectedFile, refreshToken, onListU
       }
       const data = await response.json();
       setArtifacts(data);
-      if (onListUpdate) {
-        onListUpdate(data);
+      if (onListUpdateRef.current) {
+        onListUpdateRef.current(data);
       }
     } catch (err) {
       setError(err.message);
@@ -64,7 +69,7 @@ function FileList({ sessionId, onFileSelect, selectedFile, refreshToken, onListU
         setLoading(false);
       }
     }
-  }, [sessionId, onListUpdate]);
+  }, [sessionId]);
 
   useEffect(() => {
     if (sessionId) {
