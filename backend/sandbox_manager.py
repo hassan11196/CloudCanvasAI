@@ -137,24 +137,6 @@ class SandboxManager:
                 # Directory may already exist or be unavailable; ignore and proceed.
                 pass
 
-        # Create Claude Agent SDK skill directories to prevent ENOENT errors
-        claude_skill_dirs = [
-            "/etc/claude-code/.claude/skills",
-            "/root/.claude/skills",
-        ]
-        for skill_dir in claude_skill_dirs:
-            try:
-                # Create parent directories recursively
-                parts = skill_dir.strip('/').split('/')
-                current_path = ""
-                for part in parts:
-                    current_path += f"/{part}"
-                    try:
-                        sandbox.files.make_dir(current_path)
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.warning(f"Failed to create Claude skill directory {skill_dir}: {e}")
 
     def _initialize_sandbox(self, sandbox: Sandbox):
         """Initialize sandbox with template files, scripts, and skills."""
