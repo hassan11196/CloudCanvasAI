@@ -185,7 +185,8 @@ function Chat() {
   const [docStatus, setDocStatus] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [usageSummary, setUsageSummary] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(() => auth.currentUser);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -214,6 +215,7 @@ function Chat() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
       setAuthError('');
+      setIsAuthChecking(false);
     });
     return () => unsubscribe();
   }, []);
@@ -510,6 +512,17 @@ function Chat() {
       console.error('Download failed:', err);
     }
   };
+
+  if (isAuthChecking) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="auth-title">Loading your workspace</div>
+          <p className="auth-subtitle">Hold tight while we check your sign-in status.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return (
