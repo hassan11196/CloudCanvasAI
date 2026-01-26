@@ -134,19 +134,19 @@ async def list_artifacts(
     if not sandbox:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    try:
+    try:   
         session_dir = session_workspace_dir(session_id)
         try:
             sandbox.files.make_dir(session_dir)
         except Exception:
             pass
-
+        print(f"Listing artifacts in sandbox for session {session_id} at {session_dir}")
         artifacts: list[FileInfo] = []
         try:
             session_entries = _iter_sandbox_files(sandbox, session_dir)
         except Exception:
             session_entries = []
-
+        print(f"Found {len(session_entries)} entries in session workspace")
         seen_paths = set()
         for rel_path, is_dir, file_info in session_entries:
             if is_dir:
@@ -165,30 +165,8 @@ async def list_artifacts(
             ))
             seen_paths.add(logical_path)
 
-        # Legacy prefixed files fallback
-        try:
-            legacy_list = sandbox.files.list(SANDBOX_WORKSPACE)
-        except Exception:
-            legacy_list = []
 
-        for file_info in legacy_list:
-            if file_info.type == "dir":
-                continue
-            if not _is_artifact(file_info.name):
-                continue
-            if not is_session_file(session_id, file_info.name):
-                continue
-            logical_name = session_logical_name(session_id, file_info.name)
-            if logical_name in seen_paths:
-                continue
-            artifacts.append(FileInfo(
-                name=logical_name,
-                path=logical_name,
-                is_dir=False,
-                size=getattr(file_info, "size", 0) or 0,
-                modified=getattr(file_info, "modified_at", 0) or 0
-            ))
-
+        print(f"Found {len(artifacts)} artifacts in session workspace")
         # Newest first, then name
         artifacts.sort(key=lambda f: (-f.modified, f.name.lower()))
         return artifacts

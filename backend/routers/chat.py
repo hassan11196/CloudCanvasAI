@@ -852,6 +852,7 @@ async def agent_event_generator(
     print(f"[stream] populated known files: {known_files}")
     try:
         async for msg in query(prompt=_prompt_stream(), options=options):
+            print(f"[stream] received agent message of type {type(msg)}")
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, ThinkingBlock):
