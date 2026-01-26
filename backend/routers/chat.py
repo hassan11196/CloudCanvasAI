@@ -806,7 +806,7 @@ async def agent_event_generator(
     options = ClaudeAgentOptions(
         tools=[],
         allowed_tools=DOCUMENT_TOOLS,
-        permission_mode="bypassPermissions",
+        permission_mode="default",
         cwd=None,
         resume=sid if is_resume else None,
         continue_conversation=is_resume,
