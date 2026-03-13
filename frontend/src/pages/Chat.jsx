@@ -13,7 +13,7 @@ import {
 } from '../services/firebase';
 import './Chat.css';
 
-const STORAGE_KEY = 'zephior_chats';
+const STORAGE_KEY = 'cloudcanvasai_chats';
 const ARTIFACT_EXTENSIONS = ['docx', 'pdf', 'pptx', 'xlsx', 'txt', 'md'];
 
 const createNewChat = () => ({
@@ -541,7 +541,7 @@ function Chat() {
     return (
       <div className="auth-screen">
         <div className="auth-card">
-          <div className="auth-title">Sign in to Zephior Canvas</div>
+          <div className="auth-title">Sign in to CloudCanvasAI</div>
           <p className="auth-subtitle">Use Google or email to continue</p>
           <button className="auth-google" onClick={handleGoogleLogin}>
             Continue with Google
@@ -746,7 +746,7 @@ function Chat() {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Message Zephior Canvas..."
+                placeholder="Message CloudCanvasAI..."
                 disabled={isLoading}
               />
               <button type="submit" className="send-btn" disabled={isLoading || !input.trim()}>

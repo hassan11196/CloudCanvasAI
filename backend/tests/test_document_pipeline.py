@@ -74,7 +74,7 @@ def _ensure_html2pptx_script(sandbox) -> str:
     candidate_paths = [
         # Preferred path (requested skill location)
         Path(__file__).resolve().parents[2] / "skills" / "skills" / "pptx" / "scripts" / "html2pptx.js",
-        # Fallback copy under zephior-back
+        # Fallback copy under backend
         Path(__file__).parent.parent / "skills" / "pptx" / "scripts" / "html2pptx.js",
     ]
 

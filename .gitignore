@@ -1,0 +1,29 @@
+# Environment files
+.env
+*.local
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Node
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Secrets
+secret/
+
+# E2B
+.sandboxes/
+
+# Pytest
+.pytest_cache/

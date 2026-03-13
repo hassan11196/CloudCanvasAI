@@ -1,8 +1,8 @@
 # Project Overview
 
-## Zephior Platform
+## CloudCanvasAI Platform
 
-Zephior is an AI-powered development assistant designed to help developers with coding tasks.
+CloudCanvasAI is an AI-powered development assistant designed to help developers with coding tasks.
 
 ### Key Features
 - Real-time code assistance

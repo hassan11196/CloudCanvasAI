@@ -1,4 +1,4 @@
-# E2B template configuration for Zephior document sandbox
+# E2B template configuration for CloudCanvasAI document sandbox
 # See https://e2b.dev/docs/sandbox-template for documentation
 
 # Template ID will be assigned after first build
@@ -8,7 +8,7 @@ template_id = ""
 dockerfile = "Dockerfile"
 
 # Template name/alias
-template_name = "zephior-docs"
+template_name = "cloudcanvasai-docs"
 
 # Start command (optional)
 # start_cmd = ""

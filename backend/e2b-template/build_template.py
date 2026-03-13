@@ -5,7 +5,7 @@ from e2b import Template
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build E2B template for Zephior docs")
+    parser = argparse.ArgumentParser(description="Build E2B template for CloudCanvasAI docs")
     parser.add_argument("--alias", required=True, help="Template alias name")
     parser.add_argument(
         "--skip-cache",

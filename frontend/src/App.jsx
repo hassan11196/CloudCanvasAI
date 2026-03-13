@@ -9,7 +9,7 @@ function Home() {
     <div className="home">
       <div className="home-hero">
         <div className="home-icon">⚡</div>
-        <h1 className="home-title">Zephior Canvas</h1>
+        <h1 className="home-title">CloudCanvasAI</h1>
         <p className="home-subtitle">Your AI-powered coding assistant</p>
         <div className="home-features">
           <div className="feature">

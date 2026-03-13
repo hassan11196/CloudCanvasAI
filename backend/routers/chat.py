@@ -92,7 +92,7 @@ except Exception as e:
     print("Error ensuring host skills availability: %s", e)
 # System prompt for document creation capabilities
 DOCUMENT_SYSTEM_PROMPT = """
-You are Zephior Canvas, an AI assistant with document creation and edit capabilities.
+You are CloudCanvasAI, an AI assistant with document creation and edit capabilities.
 """
 SKILL_NAMES = ("docx", "pdf", "pptx", "xlsx")
 SKILL_PATH_NOTE = (
