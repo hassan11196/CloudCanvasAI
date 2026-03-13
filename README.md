@@ -2,7 +2,61 @@
 
 An AI-powered document creation and editing platform that combines Claude AI with real-time document preview. Chat with Claude on the left, see generated documents (`.docx`, `.pptx`, `.pdf`, `.xlsx`) rendered live on the right.
 
-## Architecture
+## How It Works
+
+```mermaid
+graph LR
+    User(("👤 User"))
+
+    subgraph Browser["🖥️ Browser"]
+        direction TB
+        Login["🔐 Sign In\n(Google / Email)"]
+
+        subgraph SplitPanel["Split-Panel Interface"]
+            direction LR
+            ChatPanel["💬 Chat\nAsk Claude to create\nor edit documents"]
+            DocPanel["📄 Live Preview\nSee documents render\nin real-time"]
+        end
+
+        FileExplorer["📂 File Browser\nBrowse & download\ngenerated files"]
+    end
+
+    subgraph Cloud["☁️ Cloud"]
+        direction TB
+        AI["🤖 Claude AI\nUnderstands your request\nand writes documents"]
+
+        subgraph Sandbox["🔒 Your Private Sandbox"]
+            direction LR
+            DocSkills["📝 Document Skills\n.docx  .pptx  .pdf  .xlsx"]
+            Files["💾 Your Files\nIsolated per user"]
+        end
+    end
+
+    User -->|"Opens app"| Login
+    Login -->|"Authenticated"| SplitPanel
+    ChatPanel -->|"Send message"| AI
+    AI -->|"Streams response"| ChatPanel
+    AI -->|"Creates / edits"| DocSkills
+    DocSkills -->|"Saves to"| Files
+    Files -->|"Renders"| DocPanel
+    Files -->|"Lists"| FileExplorer
+    FileExplorer -->|"Download"| User
+
+    style User fill:#7c3aed,stroke:#7c3aed,color:#fff
+    style Browser fill:#1e1b4b,stroke:#4338ca,color:#e0e7ff
+    style SplitPanel fill:#312e81,stroke:#6366f1,color:#c7d2fe
+    style Cloud fill:#0f172a,stroke:#3b82f6,color:#bfdbfe
+    style Sandbox fill:#1e293b,stroke:#38bdf8,color:#bae6fd
+    style ChatPanel fill:#4338ca,stroke:#818cf8,color:#fff
+    style DocPanel fill:#4338ca,stroke:#818cf8,color:#fff
+    style AI fill:#7c3aed,stroke:#a78bfa,color:#fff
+    style DocSkills fill:#0369a1,stroke:#38bdf8,color:#fff
+    style Files fill:#0369a1,stroke:#38bdf8,color:#fff
+    style Login fill:#4338ca,stroke:#818cf8,color:#fff
+    style FileExplorer fill:#4338ca,stroke:#818cf8,color:#fff
+```
+
+## Technical Architecture
 
 ```mermaid
 graph TB
