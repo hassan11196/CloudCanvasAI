@@ -1,0 +1,71 @@
+{
+  "workspace": {
+    "root": "/home/user/workspace",
+    "tmpDir": "/home/user/tmp",
+    "scriptsDir": "/home/user/workspace/scripts",
+    "skillsDir": "/home/user/workspace/skills"
+  },
+  "env": {
+    "CLAUDE_PROJECT_DIR": "/home/user/workspace",
+    "CLAUDE_SKILLS_DIRS": "/home/user/workspace/skills",
+    "TMPDIR": "/home/user/tmp",
+    "NODE_PATH": "/usr/local/lib/node_modules:/usr/lib/node_modules"
+  },
+  "skills": {
+    "paths": [
+      "/home/user/workspace/skills/docx",
+      "/home/user/workspace/skills/pptx",
+      "/home/user/workspace/skills/pdf",
+      "/home/user/workspace/skills/xlsx"
+    ]
+  },
+  "permissions": {
+    "default": "bypassPermissions",
+    "allow": [
+      "Read(/home/user/workspace/**)",
+      "Read(/home/user/tmp/**)",
+      "Write(/home/user/workspace/**)",
+      "Write(/home/user/tmp/**)",
+      "Edit(/home/user/workspace/**)",
+      "Edit(/home/user/tmp/**)",
+      "Glob(*)",
+      "Grep(*)",
+      "Bash(python:*)",
+      "Bash(node:*)",
+      "Bash(npm:install*)",
+      "Bash(pip:install*)",
+      "Bash(libreoffice:*)",
+      "Bash(pandoc:*)",
+      "Bash(docx:*)",
+      "Bash(pptxgenjs:*)",
+      "Bash(pdf2image:*)"
+    ]
+  },
+  "agents": {
+    "zephior-docs": {
+      "description": "Document-first Zephior agent for .docx/.pptx/.pdf/.xlsx generation inside the E2B sandbox.",
+      "prompt": "You are Zephior Canvas, an AI assistant with document creation and edit capabilities for .docx, .pptx, .pdf, and .xlsx.\nSkill assets are available under /home/user/workspace/skills/{docx,pdf,pptx,xlsx}. When instructions reference relative paths like ooxml/scripts or scripts/thumbnail.py, run them from the appropriate skill directory or use absolute paths under /home/user/workspace/skills. Use /home/user/workspace for working files and /home/user/tmp for temporary files.\nFor sandbox sessions, keep outputs in /home/user/workspace/{session_id} when provided, but do not include the session id in filenames. Binary documents should be at least 100 bytes before emitting a file_change event.\nDefault tools are Read, Write, Edit, Glob, Grep, and Bash. Create files directly with Write/Edit/Bash; if a docx write fails, retry once with python-docx via /home/user/workspace/scripts/create_docx.py before giving up.\nWhen starting document generation, emit a doc_generation_requested status with the intended filename, and after successful writes emit file_change events so the preview panel can refresh.",
+      "tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash"
+      ],
+      "model": "sonnet"
+    }
+  },
+  "defaults": {
+    "agent": "zephior-docs",
+    "allowedTools": [
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Bash"
+    ],
+    "permissionMode": "bypassPermissions"
+  }
+}

@@ -1,0 +1,39 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TMPDIR=/home/user/tmp \
+    NODE_PATH=/usr/lib/node_modules:/usr/local/lib/node_modules
+
+WORKDIR /home/user
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice \
+    pandoc \
+    poppler-utils \
+    curl \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+    defusedxml \
+    openpyxl \
+    pandas \
+    pdf2image \
+    pdfplumber \
+    pillow \
+    pypdf \
+    python-docx \
+    python-pptx
+
+RUN npm install -g \
+    docx \
+    playwright \
+    pptxgenjs \
+    sharp \
+    && playwright install --with-deps chromium
+
+COPY scripts ./scripts
+COPY skills ./skills
+COPY very_imp_data ./very_imp_data
