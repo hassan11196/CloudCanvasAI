@@ -1,6 +1,6 @@
-# Zephior Canvas Backend
+# CloudCanvasAI Backend
 
-FastAPI backend for Zephior Canvas.
+FastAPI backend for CloudCanvasAI.
 
 ## Setup
 

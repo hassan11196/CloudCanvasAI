@@ -4,7 +4,7 @@
 
 ```
 CLAUDE_API_KEY=sk-ant-xxxxx
-DATABASE_URL=postgresql://localhost:5432/zephior
+DATABASE_URL=postgresql://localhost:5432/cloudcanvasai
 REDIS_URL=redis://localhost:6379
 ```
 

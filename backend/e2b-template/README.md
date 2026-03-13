@@ -6,10 +6,10 @@ docx/pptx/pdf/xlsx generation and editing.
 ## Build
 
 ```bash
-python build_template.py --alias zephior-docs
+python build_template.py --alias cloudcanvasai-docs
 ```
 
-Then set `E2B_TEMPLATE=zephior-docs` in your backend `.env`.
+Then set `E2B_TEMPLATE=cloudcanvasai-docs` in your backend `.env`.
 
 ## Notes
 

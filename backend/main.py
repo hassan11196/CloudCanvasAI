@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers import chat, files
 
 app = FastAPI(
-    title="Zephior API",
-    description="Backend API for Zephior",
+    title="CloudCanvasAI API",
+    description="Backend API for CloudCanvasAI",
     version="0.1.0"
 )
 
@@ -24,7 +24,7 @@ app.include_router(files.router)
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to Zephior API"}
+    return {"message": "Welcome to CloudCanvasAI API"}
 
 
 @app.get("/health")

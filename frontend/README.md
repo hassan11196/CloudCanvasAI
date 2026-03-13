@@ -1,6 +1,6 @@
-# Zephior Canvas Frontend
+# CloudCanvasAI Frontend
 
-Vite + React frontend for Zephior Canvas.
+Vite + React frontend for CloudCanvasAI.
 
 ## Setup
 
